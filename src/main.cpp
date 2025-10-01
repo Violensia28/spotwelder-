@@ -5,7 +5,7 @@
 #include <math.h>
 #include "Config.h"
 
-// ===== Globals =====
+// ================= Globals =================
 WebServer server(80);
 Preferences prefs; // NVS
 
@@ -31,7 +31,26 @@ Accum accV = {0,0,0};
 uint32_t winStart = 0;
 float Irms = 0.0f, Vrms = 0.0f; // computed every window
 
-// ===== Preset model =====
+// Auto-Trigger & Guards
+bool  auto_en   = DEF_AUTO_EN;
+bool  guard_en  = DEF_GUARD_EN;
+float I_trig_A  = DEF_I_TRIG_A;
+float V_cut_V   = DEF_V_CUTOFF_V;
+float I_lim_A   = DEF_I_LIMIT_A;
+uint32_t cooldownMs = DEF_COOLDOWN_MS;
+uint8_t stableWinReq = DEF_STABLE_WIN;
+
+uint8_t stableCnt = 0;         // consecutive windows over thresholds
+unsigned long lastWeldEnd = 0; // timestamp of last cycle end
+
+// Event log (simple ring)
+static const int LOGN = 20;
+String logBuf[LOGN];
+int logIdx = 0;
+
+void addLog(const String &s){ logBuf[logIdx] = s; logIdx = (logIdx+1)%LOGN; Serial.println(String("[LOG] ")+s); }
+
+// ================= Preset model =================
 struct Preset { uint8_t id; const char* name; const char* group; uint16_t preMs; uint16_t mainMs; };
 static const char* GRP_NI_THIN = "Ni-Thin";
 static const char* GRP_NI_MED  = "Ni-Med";
@@ -63,7 +82,7 @@ static void makePreset(uint8_t L, Preset &p){
   durationsForLevel(L, p.preMs, p.mainMs);
 }
 
-// ===== HTML UI =====
+// ================= HTML UI =================
 static const char indexHtml[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html>
@@ -77,7 +96,7 @@ body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:20px;background:var(--bg
 .btn{font-size:16px;padding:10px 14px;border-radius:10px;border:none;background:var(--btn);color:#fff;cursor:pointer;text-decoration:none;display:inline-block}
 .btn:active{transform:scale(.98)}
 input,select{padding:8px;border-radius:8px;border:1px solid #2a3b63;background:#0f1b3d;color:#fff}
-.card{background:var(--card);padding:16px;border-radius:14px;max-width:980px;margin:0 auto}
+.card{background:var(--card);padding:16px;border-radius:14px;max-width:1020px;margin:0 auto}
 .row{display:flex;gap:12px;flex-wrap:wrap}
 .col{flex:1 1 300px}
 .badge{display:inline-block;padding:4px 8px;border-radius:6px;background:#0f3460;}
@@ -85,16 +104,17 @@ small{opacity:.7}
 hr{border:0;border-top:1px solid #2a3b63;margin:14px 0}
 table{width:100%;border-collapse:collapse;margin-top:8px}
 th,td{border-bottom:1px solid #2a3b63;padding:8px;text-align:left}
+.switch{display:inline-flex;align-items:center;gap:8px}
 </style>
 <script>
 let presets=[]; let current=1; let grp=''; let q='';
 async function load(){
   const pv = await fetch('/api/presets'); presets=await pv.json();
   const cv = await fetch('/api/current'); const cx = await cv.json(); current=cx.id;
+  await loadGuard();
   document.getElementById('ver').textContent='%v%';
   renderPresets();
   poll(); setInterval(poll, 600);
-  loadCalib();
 }
 function renderPresets(){
   const tbody = document.getElementById('tbody'); tbody.innerHTML='';
@@ -115,33 +135,44 @@ function setQ(v){ q=v.toLowerCase(); renderPresets(); }
 async function poll(){
   try{
     const r = await fetch('/api/sensor'); const s = await r.json();
-    document.getElementById('vrms').textContent = s.vrms.toFixed(1)+' V';
-    document.getElementById('irms').textContent = s.irms.toFixed(2)+' A';
-    document.getElementById('samples').textContent = s.n + ' samp / '+ s.win_ms +' ms';
+    id('vrms').textContent = s.vrms.toFixed(1)+' V';
+    id('irms').textContent = s.irms.toFixed(2)+' A';
+    id('samples').textContent = s.n + ' samp / '+ s.win_ms +' ms';
+    const g = await (await fetch('/api/guard/status')).json();
+    id('auto_state').textContent = g.auto_en?'ON':'OFF';
+    id('guard_state').textContent = g.guard_en?'ON':'OFF';
+    id('cool').textContent = g.cooldown_ms+' ms';
+    id('stable').textContent = g.stable_win+' win';
+    id('ready').textContent = g.ready? 'READY' : 'HOLD';
+    id('last').textContent = g.last;
   }catch(e){console.log(e)}
 }
 
-async function loadCalib(){
-  const r = await fetch('/api/calib/load'); const c = await r.json();
-  id('i_off').value = c.i_off; id('v_off').value = c.v_off; id('i_sc').value = c.i_sc.toFixed(6); id('v_sc').value = c.v_sc.toFixed(6);
+async function loadGuard(){
+  const g = await (await fetch('/api/guard/load')).json();
+  id('auto_en').checked = g.auto_en; id('guard_en').checked = g.guard_en;
+  id('i_trig').value = g.i_trig.toFixed(2);
+  id('v_cut').value = g.v_cut.toFixed(1);
+  id('i_lim').value = g.i_lim.toFixed(1);
+  id('cd').value = g.cooldown_ms;
+  id('sw').value = g.stable_win;
 }
-async function zero(ch){ const r = await fetch('/api/calib/zero?ch='+ch); if(r.ok){ await loadCalib(); beep(); } }
-async function save(){
-  const i_sc = id('i_sc').value; const v_sc = id('v_sc').value;
-  const url = `/api/calib/save?i_sc=${i_sc}&v_sc=${v_sc}`; const r = await fetch(url); if(r.ok){ beep(); }
-}
-async function autoV(){
-  const target = prompt('Target Vrms (mis. 220):', '220'); if(!target) return;
-  const r = await fetch('/api/calib/auto_v?target='+encodeURIComponent(target)); if(r.ok){ await loadCalib(); beep(); }
-}
-async function autoI(){
-  const target = prompt('Target Irms (A):', '10'); if(!target) return;
-  const r = await fetch('/api/calib/auto_i?target='+encodeURIComponent(target)); if(r.ok){ await loadCalib(); beep(); }
+async function saveGuard(){
+  const p = new URLSearchParams({
+    auto: id('auto_en').checked? '1':'0',
+    guard: id('guard_en').checked? '1':'0',
+    i_trig: id('i_trig').value,
+    v_cut: id('v_cut').value,
+    i_lim: id('i_lim').value,
+    cd: id('cd').value,
+    sw: id('sw').value
+  });
+  const r = await fetch('/api/guard/save?'+p.toString()); if(r.ok){ beep(); await loadGuard(); }
 }
 
 function id(s){return document.getElementById(s)}
-function beep(){try{const c=new (window.AudioContext||window.webkitAudioContext)();const o=c.createOscillator();const g=c.createGain();o.type='square';o.frequency.value=720;g.gain.value=0.05;o.connect(g);g.connect(c.destination);o.start();setTimeout(()=>o.stop(),150);}catch(e){}}
-async function trig(){ const r=await fetch('/trigger'); const t=await r.text(); beep(); document.getElementById('status').textContent=t; }
+function beep(){try{const c=new (window.AudioContext||window.webkitAudioContext)();const o=c.createOscillator();const g=c.createGain();o.type='square';o.frequency.value=720;g.gain.value=0.05;o.connect(g);g.connect(c.destination);o.start();setTimeout(()=>o.stop(),140);}catch(e){}}
+async function trig(){ const r=await fetch('/trigger'); const t=await r.text(); beep(); id('status').textContent=t; }
 </script>
 </head>
 <body onload="load()">
@@ -157,23 +188,25 @@ async function trig(){ const r=await fetch('/trigger'); const t=await r.text(); 
         <a class="btn" href="/update">Open OTA Updater</a>
       </div>
       <div class="col">
-        <p><b>Filter Preset</b></p>
-        <select onchange="setGrp(this.value)">
-          <option value="">All</option>
-          <option>Ni-Thin</option>
-          <option>Ni-Med</option>
-          <option>Ni-Thick</option>
-          <option>Al</option>
-          <option>Cu</option>
-          <option>Custom</option>
-        </select>
-        <p style="margin-top:8px"><input placeholder="Cari id/nama..." oninput="setQ(this.value)"></p>
-      </div>
-      <div class="col">
         <p><b>Live Sensor</b></p>
         <div>Vrms: <b id="vrms">-</b></div>
         <div>Irms: <b id="irms">-</b></div>
         <small id="samples">-</small>
+      </div>
+      <div class="col">
+        <p><b>Auto‑Trigger & Guard</b></p>
+        <div class="switch"><input type="checkbox" id="auto_en"> <label for="auto_en">Auto‑Trigger</label></div>
+        <div class="switch"><input type="checkbox" id="guard_en"> <label for="guard_en">V/I Guard</label></div>
+        <div style="margin-top:8px">
+          <div>I trig (A): <input id="i_trig" style="width:120px"></div>
+          <div>V cutoff (V): <input id="v_cut" style="width:120px"></div>
+          <div>I limit (A): <input id="i_lim" style="width:120px"></div>
+          <div>Cooldown (ms): <input id="cd" style="width:120px"></div>
+          <div>Stable windows: <input id="sw" style="width:120px"></div>
+        </div>
+        <p style="margin-top:8px"><button class="btn" onclick="saveGuard()">Save Guard</button></p>
+        <small>Status: auto=<b id="auto_state">-</b>, guard=<b id="guard_state">-</b>, ready=<b id="ready">-</b>, cd=<b id="cool">-</b>, sw=<b id="stable">-</b></small>
+        <div style="margin-top:6px"><small>Last: <span id="last">-</span></small></div>
       </div>
     </div>
     <hr>
@@ -182,30 +215,6 @@ async function trig(){ const r=await fetch('/trigger'); const t=await r.text(); 
       <thead><tr><th>ID</th><th>Nama</th><th>Grup</th><th>Pre</th><th>Main</th><th></th></tr></thead>
       <tbody id="tbody"></tbody>
     </table>
-    <hr>
-    <h3>Calibration</h3>
-    <div class="row">
-      <div class="col">
-        <p><b>Offsets (raw ADC center)</b></p>
-        <div>Current offset: <input id="i_off" disabled style="width:120px"></div>
-        <div>Voltage offset: <input id="v_off" disabled style="width:120px"></div>
-        <p>
-          <button class="btn" onclick="zero('i')">Zero Current</button>
-          <button class="btn" onclick="zero('v')">Zero Voltage</button>
-        </p>
-      </div>
-      <div class="col">
-        <p><b>Scales</b></p>
-        <div>I scale (A/count): <input id="i_sc" style="width:160px"></div>
-        <div>V scale (V/count): <input id="v_sc" style="width:160px"></div>
-        <p>
-          <button class="btn" onclick="save()">Save</button>
-          <button class="btn" onclick="autoV()">Auto-Scale Voltage (to target)</button>
-          <button class="btn" onclick="autoI()">Auto-Scale Current (to target)</button>
-        </p>
-        <small>Catatan: lakukan <i>Zero</i> dulu tanpa beban, lalu atur scale dengan referensi meteran.</small>
-      </div>
-    </div>
   </div>
 </body>
 </html>
@@ -238,7 +247,7 @@ button{font-size:16px;padding:10px 16px;border-radius:8px;border:none;background
 </html>
 )rawliteral";
 
-// ===== Helpers =====
+// ================= Helpers =================
 String applyVersion(const char* tpl){ String s(tpl); s.replace("%v%", BUILD_VERSION); return s; }
 
 void loadSelected(){
@@ -249,6 +258,14 @@ void loadSelected(){
   V_offset = prefs.getInt("v_off", DEF_V_OFFSET);
   I_scale  = prefs.getFloat("i_sc", DEF_I_SCALE);
   V_scale  = prefs.getFloat("v_sc", DEF_V_SCALE);
+  // guard
+  auto_en  = prefs.getBool("auto_en", DEF_AUTO_EN);
+  guard_en = prefs.getBool("grd_en", DEF_GUARD_EN);
+  I_trig_A = prefs.getFloat("i_trig", DEF_I_TRIG_A);
+  V_cut_V  = prefs.getFloat("v_cut", DEF_V_CUTOFF_V);
+  I_lim_A  = prefs.getFloat("i_lim", DEF_I_LIMIT_A);
+  cooldownMs = prefs.getUInt("cool_ms", DEF_COOLDOWN_MS);
+  stableWinReq = (uint8_t)prefs.getUChar("stb_win", DEF_STABLE_WIN);
   prefs.end();
   // apply durations from preset
   Preset p; makePreset(g_selectedPreset, p);
@@ -259,44 +276,64 @@ void saveSelected(){ prefs.begin("swp", false); prefs.putUChar("sel", g_selected
 
 void saveCalib(){ prefs.begin("swp", false); prefs.putInt("i_off", I_offset); prefs.putInt("v_off", V_offset); prefs.putFloat("i_sc", I_scale); prefs.putFloat("v_sc", V_scale); prefs.end(); }
 
-// ===== Sensor sampling =====
-static inline int readADC(gpio_num_t pin){ return analogRead((uint8_t)pin); }
+void saveGuard(){ prefs.begin("swp", false); prefs.putBool("auto_en", auto_en); prefs.putBool("grd_en", guard_en); prefs.putFloat("i_trig", I_trig_A); prefs.putFloat("v_cut", V_cut_V); prefs.putFloat("i_lim", I_lim_A); prefs.putUInt("cool_ms", cooldownMs); prefs.putUChar("stb_win", stableWinReq); prefs.end(); }
+
+// ================= Sensor sampling =================
+static inline int readADC(int pin){ return analogRead((uint8_t)pin); }
 
 void sensorInit(){
   analogReadResolution(12); // 12-bit (0..4095)
-  // Optional: set attenuation for 0..3.3V range (default is fine on Arduino core)
   winStart = millis();
   accI = {0,0,0}; accV = {0,0,0};
 }
 
 void sensorLoop(){
-  // Take few samples per loop to avoid blocking; tune this if needed
   for(int i=0;i<3;i++){
-    int ri = readADC((gpio_num_t)ACS712_PIN);
-    int rv = readADC((gpio_num_t)ZMPT_PIN);
+    int ri = readADC(ACS712_PIN);
+    int rv = readADC(ZMPT_PIN);
     int32_t di = (int32_t)ri - I_offset; // centered
     int32_t dv = (int32_t)rv - V_offset;
-    accI.sumSq += (int64_t)di * (int64_t)di;
-    accI.sum   += di;
-    accI.n++;
-    accV.sumSq += (int64_t)dv * (int64_t)dv;
-    accV.sum   += dv;
-    accV.n++;
+    accI.sumSq += (int64_t)di * (int64_t)di; accI.sum += di; accI.n++;
+    accV.sumSq += (int64_t)dv * (int64_t)dv; accV.sum += dv; accV.n++;
   }
   uint32_t now = millis();
   if(now - winStart >= SENSE_WIN_MS){
-    // Compute RMS from sumSq/n (counts), then scale
-    float i_rms_counts = (accI.n>0)? sqrt((double)accI.sumSq / (double)accI.n) : 0.0;
-    float v_rms_counts = (accV.n>0)? sqrt((double)accV.sumSq / (double)accV.n) : 0.0;
-    Irms = i_rms_counts * I_scale;
-    Vrms = v_rms_counts * V_scale;
-    // reset window
+    float i_counts = (accI.n>0)? sqrt((double)accI.sumSq / (double)accI.n) : 0.0;
+    float v_counts = (accV.n>0)? sqrt((double)accV.sumSq / (double)accV.n) : 0.0;
+    Irms = i_counts * I_scale;
+    Vrms = v_counts * V_scale;
+
+    // Auto-trigger window logic
+    bool above = (Irms >= I_trig_A) && (Vrms >= V_cut_V);
+    if(above) stableCnt++; else stableCnt = 0;
+
+    // reset window accumulators
     accI = {0,0,0}; accV = {0,0,0};
     winStart = now;
   }
 }
 
-// ===== Routes: Presets & Sensors =====
+// ================= Guards & Auto =================
+bool canTrigger(){
+  if(!auto_en) return false;
+  if(g_state != IDLE) return false;
+  if(guard_en){
+    if(Vrms < V_cut_V) return false; // undervoltage hold
+  }
+  // cooldown
+  if(millis() - lastWeldEnd < cooldownMs) return false;
+  // stability
+  if(stableCnt < stableWinReq) return false;
+  return true;
+}
+
+void abortWeld(const char* reason){
+  digitalWrite(SSR_PIN, LOW);
+  g_state = IDLE;
+  addLog(String("ABORT: ")+reason);
+}
+
+// ================= API Routes =================
 void respondJsonPresets(){
   String out = "[";
   for(uint8_t i=1;i<=PRESET_COUNT;i++){
@@ -328,80 +365,95 @@ void handleSensor(){
   server.send(200, "application/json", out);
 }
 
-void handleCalibLoad(){
+void handleGuardLoad(){
   String out = "{";
-  out += "\"i_off\":" + String(I_offset) + ",";
-  out += "\"v_off\":" + String(V_offset) + ",";
-  out += "\"i_sc\":" + String(I_scale, 6) + ",";
-  out += "\"v_sc\":" + String(V_scale, 6);
+  out += "\"auto_en\":" + String(auto_en?1:0) + ",";
+  out += "\"guard_en\":" + String(guard_en?1:0) + ",";
+  out += "\"i_trig\":" + String(I_trig_A,2) + ",";
+  out += "\"v_cut\":" + String(V_cut_V,1) + ",";
+  out += "\"i_lim\":" + String(I_lim_A,1) + ",";
+  out += "\"cooldown_ms\":" + String(cooldownMs) + ",";
+  out += "\"stable_win\":" + String(stableWinReq);
   out += "}";
   server.send(200, "application/json", out);
 }
 
-void handleCalibZero(){
-  if(!server.hasArg("ch")){ server.send(400, "text/plain", "missing ch"); return; }
-  String ch = server.arg("ch");
-  // sample quick burst to estimate center
-  const int N = 256;
-  int64_t sum = 0;
-  if(ch == "i"){
-    for(int i=0;i<N;i++) sum += analogRead(ACS712_PIN);
-    I_offset = (int)(sum / N);
-  } else if(ch == "v"){
-    for(int i=0;i<N;i++) sum += analogRead(ZMPT_PIN);
-    V_offset = (int)(sum / N);
-  } else { server.send(400, "text/plain", "bad ch"); return; }
-  saveCalib();
+void handleGuardSave(){
+  if(server.hasArg("auto")) auto_en = (server.arg("auto")=="1");
+  if(server.hasArg("guard")) guard_en = (server.arg("guard")=="1");
+  if(server.hasArg("i_trig")) I_trig_A = server.arg("i_trig").toFloat();
+  if(server.hasArg("v_cut"))  V_cut_V  = server.arg("v_cut").toFloat();
+  if(server.hasArg("i_lim"))  I_lim_A  = server.arg("i_lim").toFloat();
+  if(server.hasArg("cd"))     cooldownMs = server.arg("cd").toInt();
+  if(server.hasArg("sw"))     stableWinReq = (uint8_t)server.arg("sw").toInt();
+  saveGuard();
   server.send(200, "text/plain", "OK");
 }
 
-void handleCalibSave(){
-  if(server.hasArg("i_sc")) I_scale = server.arg("i_sc").toFloat();
-  if(server.hasArg("v_sc")) V_scale = server.arg("v_sc").toFloat();
-  saveCalib();
-  server.send(200, "text/plain", "OK");
+void handleGuardStatus(){
+  bool ready = canTrigger();
+  String out = "{";
+  out += "\"auto_en\":" + String(auto_en?1:0) + ",";
+  out += "\"guard_en\":" + String(guard_en?1:0) + ",";
+  out += "\"cooldown_ms\":" + String(cooldownMs) + ",";
+  out += "\"stable_win\":" + String(stableWinReq) + ",";
+  out += "\"ready\":" + String(ready?1:0) + ",";
+  out += "\"last\":\"" + (logBuf[(logIdx+LOGN-1)%LOGN]) + "\"";
+  out += "}";
+  server.send(200, "application/json", out);
 }
 
-void handleAutoV(){
-  if(!server.hasArg("target")){ server.send(400, "text/plain", "missing target"); return; }
-  float target = server.arg("target").toFloat();
-  // Use current window's RMS counts; prevent div by zero
-  float counts = (V_scale>0.0f) ? (Vrms / V_scale) : 0.0f;
-  if(counts < 1.0f){ server.send(400, "text/plain", "low signal"); return; }
-  V_scale = target / counts;
-  saveCalib();
-  server.send(200, "text/plain", "OK");
+void handleLog(){
+  String out = "[";
+  for(int i=0;i<LOGN;i++){
+    int idx = (logIdx + i) % LOGN;
+    if(i>0) out += ",";
+    out += "\"" + logBuf[idx] + "\"";
+  }
+  out += "]";
+  server.send(200, "application/json", out);
 }
 
-void handleAutoI(){
-  if(!server.hasArg("target")){ server.send(400, "text/plain", "missing target"); return; }
-  float target = server.arg("target").toFloat();
-  float counts = (I_scale>0.0f) ? (Irms / I_scale) : 0.0f;
-  if(counts < 1.0f){ server.send(400, "text/plain", "low signal"); return; }
-  I_scale = target / counts;
-  saveCalib();
-  server.send(200, "text/plain", "OK");
+// ================= Trigger & FSM =================
+void startWeld(){
+  if(g_state!=IDLE) return;
+  g_state = (g_preMs>0? PRE_PULSE: MAIN_PULSE);
+  g_t0 = millis();
+  digitalWrite(SSR_PIN, (g_state!=IDLE));
+  addLog("WELD START");
 }
 
-// ===== Trigger & FSM =====
-void startWeld(){ if(g_state!=IDLE) return; g_state = (g_preMs>0? PRE_PULSE: MAIN_PULSE); g_t0 = millis(); digitalWrite(SSR_PIN, (g_state!=IDLE)); }
+void fsmLoop(){
+  unsigned long t = millis();
+  // Guards during weld
+  if(guard_en && g_state != IDLE){
+    if(Irms > I_lim_A){ abortWeld("OverCurrent"); lastWeldEnd = millis(); return; }
+    if(Vrms < V_cut_V){ abortWeld("UnderVoltage"); lastWeldEnd = millis(); return; }
+  }
 
-void fsmLoop(){ unsigned long t = millis(); switch(g_state){
-  case IDLE: break;
-  case PRE_PULSE:
-    if(t - g_t0 >= g_preMs){ digitalWrite(SSR_PIN, LOW); g_state = GAP; g_t0 = t; }
-    break;
-  case GAP:
-    if(t - g_t0 >= g_gapMs){ g_state = MAIN_PULSE; g_t0 = t; digitalWrite(SSR_PIN, HIGH); }
-    break;
-  case MAIN_PULSE:
-    if(t - g_t0 >= g_mainMs){ digitalWrite(SSR_PIN, LOW); g_state = IDLE; }
-    break; }
+  switch(g_state){
+    case IDLE:
+      // Auto trigger decision in IDLE
+      if(canTrigger()){
+        stableCnt = 0; // consume stability
+        startWeld();
+      }
+      break;
+    case PRE_PULSE:
+      if(t - g_t0 >= g_preMs){ digitalWrite(SSR_PIN, LOW); g_state = GAP; g_t0 = t; }
+      break;
+    case GAP:
+      if(t - g_t0 >= g_gapMs){ g_state = MAIN_PULSE; g_t0 = t; digitalWrite(SSR_PIN, HIGH); }
+      break;
+    case MAIN_PULSE:
+      if(t - g_t0 >= g_mainMs){ digitalWrite(SSR_PIN, LOW); g_state = IDLE; lastWeldEnd = millis(); addLog("WELD END"); }
+      break;
+  }
 }
 
 void handleTrigger(){ startWeld(); server.send(200, "text/plain", "Weld cycle started"); }
 
-// ===== Setup / Loop =====
+// ================= Setup / Loop =================
 void setup(){
   Serial.begin(115200);
   pinMode(SSR_PIN, OUTPUT); digitalWrite(SSR_PIN, LOW);
@@ -424,11 +476,11 @@ void setup(){
   server.on("/api/select", HTTP_GET, handleSelect);
   // Sensor/API
   server.on("/api/sensor", HTTP_GET, handleSensor);
-  server.on("/api/calib/load", HTTP_GET, handleCalibLoad);
-  server.on("/api/calib/zero", HTTP_GET, handleCalibZero);
-  server.on("/api/calib/save", HTTP_GET, handleCalibSave);
-  server.on("/api/calib/auto_v", HTTP_GET, handleAutoV);
-  server.on("/api/calib/auto_i", HTTP_GET, handleAutoI);
+  // Guard/API
+  server.on("/api/guard/load", HTTP_GET, handleGuardLoad);
+  server.on("/api/guard/save", HTTP_GET, handleGuardSave);
+  server.on("/api/guard/status", HTTP_GET, handleGuardStatus);
+  server.on("/api/log", HTTP_GET, handleLog);
   // OTA
   server.on("/update", HTTP_GET, [](){ if(!server.authenticate(OTA_USER, OTA_PASS)) return server.requestAuthentication(); server.send(200, "text/html", updateHtml); });
   server.on("/update", HTTP_POST, [](){ if(!server.authenticate(OTA_USER, OTA_PASS)) return server.requestAuthentication(); bool ok=!Update.hasError(); server.sendHeader("Connection","close"); server.send(200, "text/plain", ok?"OK":"FAIL"); delay(200); ESP.restart(); },
