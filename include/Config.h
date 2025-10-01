@@ -9,7 +9,7 @@
 #define PRESET_COUNT 99
 
 #ifndef BUILD_VERSION
-#define BUILD_VERSION "Build_3_Presets"
+#define BUILD_VERSION "Build_4_Sensor"
 #endif
 
 // SoftAP credentials
@@ -19,5 +19,14 @@
 // OTA auth (basic HTTP auth)
 #define OTA_USER "admin"
 #define OTA_PASS "admin"
+
+// Sensor defaults (can be calibrated)
+#define DEF_I_OFFSET 2048
+#define DEF_V_OFFSET 2048
+#define DEF_I_SCALE  0.00050f   // A per ADC count (placeholder, to be calibrated)
+#define DEF_V_SCALE  0.10000f   // V per ADC count (placeholder, to be calibrated)
+
+// Sensor window (ms)
+#define SENSE_WIN_MS 250
 
 #endif
