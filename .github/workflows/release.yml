@@ -29,7 +29,7 @@ jobs:
           cp "$BUILD/firmware.bin" dist/spotweldingplus-app.bin
           BOOT=$(ls "$BUILD"/bootloader*.bin | head -n1 || true)
           PART=$(ls "$BUILD"/partitions*.bin | head -n1 || true)
-          if [ -n "$BOOT" ] && [ -n "$PART" ]; then
+          if [ -n "$BOOT" ] && [ -n "$PART" ] ; then
             cp "$BOOT" dist/bootloader.bin
             cp "$PART" dist/partitions.bin
             esptool.py --chip esp32 merge_bin -o dist/spotweldingplus-merged.bin               --flash_mode dio --flash_freq 40m --flash_size 4MB               0x1000 dist/bootloader.bin 0x8000 dist/partitions.bin 0x10000 dist/spotweldingplus-app.bin
