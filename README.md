@@ -1,31 +1,36 @@
-# spotwelding+ (Build #3 — Preset 99 + Filter)
+# spotwelding+ (Build #4 — Sensor + Kalibrasi)
 
-Build #3 menambahkan **UI Preset 99** dengan **Filter Grup** + pemilihan preset yang disimpan ke NVS.
+Build #4 menambahkan **halaman Sensor (Vrms, Irms)** dan **Kalibrasi (offset & scale)** untuk ACS712 (arus) dan ZMPT (tegangan), disimpan ke NVS.
 
-## Fitur
-- **UI Preset 99** dengan filter grup (Ni‑Thin, Ni‑Med, Ni‑Thick, Al, Cu, Custom)
-- **Pemilihan preset** tersimpan (NVS) dan dipakai saat **Trigger**
-- **Non‑blocking FSM** untuk pre‑pulse → gap → main‑pulse
-- **SoftAP only** (SSID `SpotWelder_AP`, Pass `12345678`)
-- **OTA Update** tetap via `/update`
+## Fitur Utama
+- **Live Sensor**: Vrms & Irms (window ~250 ms)
+- **Kalibrasi**:
+  - **Zero Current / Zero Voltage** (set offset dari kondisi tanpa beban/AC)
+  - **Scale** (A/count, V/count) manual atau **Auto‑Scale** berdasarkan target (mis. 220V)
+  - Disimpan ke **NVS** (persisten)
+- **UI Preset 99 + Filter** tetap ada; **OTA** via `/update`
+- **Non‑blocking loop** (sampling ringan per loop)
 
-## Endpoint & UI
-- Web UI: `http://192.168.4.1/` atau `/ui`
-- OTA: `http://192.168.4.1/update` (default `admin/admin`)
-- API: `/api/presets`, `/api/current`, `/api/select?id=NUM`
-- Versi: `/version` → `Build_3_Presets`
+## Endpoint
+- `/api/sensor` → `{ vrms, irms, n, win_ms }`
+- `/api/calib/load` → `{ i_off, v_off, i_sc, v_sc }`
+- `/api/calib/zero?ch=i|v` → set offset (ambil 256 sampel)
+- `/api/calib/save?i_sc=..&v_sc=..` → simpan skala
+- `/api/calib/auto_v?target=220` → V_scale dari sinyal saat ini
+- `/api/calib/auto_i?target=10` → I_scale dari sinyal saat ini
 
-## Catatan Preset
-Preset 1..99 dibuat otomatis berdasarkan level → durasi *(pre, main)* secara terukur:
-- Pre‑pulse: 0..80 ms (naik bertahap)
-- Main pulse: ~70..300 ms (linear bertahap)
-- Gap tetap: 60 ms (sementara)
+## Prosedur Kalibrasi (Disarankan)
+1) **Zero Voltage**: lepas sumber AC dari ZMPT → klik *Zero Voltage*  
+2) **Zero Current**: tanpa arus pada ACS712 → klik *Zero Current*  
+3) **Auto‑Scale Voltage**: sambungkan AC referensi (mis. 220V) → *Auto‑Scale Voltage (to target)*  
+4) **Auto‑Scale Current**: alirkan arus referensi (mis. clamp meter = 10A) → *Auto‑Scale Current*  
+5) **Save** → nilai tersimpan ke NVS
 
-> Grup digunakan untuk **filter tampilan**; mapping level → grup: 1–20 Ni‑Thin, 21–40 Ni‑Med, 41–60 Ni‑Thick, 61–78 Al, 79–96 Cu, 97–99 Custom.
+> **Catatan:** Nilai default `I_scale`/`V_scale` adalah placeholder. Lakukan kalibrasi agar akurat. Performa ADC ESP32 dipengaruhi noise/attenuasi/kabel; gunakan PSU & wiring yang baik.
 
-## Build & Flash
-- PlatformIO upload biasa (atau flash awal via `spotweldingplus-merged.bin @ 0x0`)
-- Update berikutnya: **OTA** unggah `spotweldingplus-app.bin`
+## Build & Update
+- Flash awal: `spotweldingplus-merged.bin @ 0x0` (Android Flasher)
+- Update berikutnya: **OTA** → unggah `spotweldingplus-app.bin` ke `/update`
 
 ## Keamanan
-Ganti kredensial OTA di `include/Config.h` sebelum rilis lapangan.
+- Ganti kredensial OTA di `include/Config.h`.
