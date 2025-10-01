@@ -1,13 +1,23 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-// Pin mapping
 #define SSR_PIN 26
 #define ACS712_PIN 34
 #define ZMPT_PIN 35
-#define BUZZER_PIN 27 // Dummy, replaced by Web Audio beep
+#define BUZZER_PIN 27 // Dummy (Web Audio beep used)
 
-// Constants
 #define PRESET_COUNT 99
+
+#ifndef BUILD_VERSION
+#define BUILD_VERSION "Build_2_OTA"
+#endif
+
+// SoftAP credentials
+#define AP_SSID "SpotWelder_AP"
+#define AP_PASS "12345678"
+
+// OTA auth (basic HTTP auth)
+#define OTA_USER "admin"
+#define OTA_PASS "admin"
 
 #endif
