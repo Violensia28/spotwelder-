@@ -1,0 +1,14 @@
+
+{
+  "name": "Spotwelding+",
+  "version": "Build_2_OTA",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32",
+      "parts": [
+        { "path": "spotweldingplus-merged.bin", "offset": 0 }
+      ]
+    }
+  ]
+}
