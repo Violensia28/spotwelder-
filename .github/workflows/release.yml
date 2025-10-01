@@ -1,12 +1,14 @@
 
-name: CI Build
+name: Release
 
 on:
-  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
 
 jobs:
-  build:
-    name: Build & Upload Artifacts
+  release:
+    name: Build & Publish Release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -31,23 +33,19 @@ jobs:
           set -e
           BUILD_DIR=.pio/build/esp32dev
           mkdir -p dist
-          # Core app binary
           cp "$BUILD_DIR/firmware.bin" dist/spotweldingplus-app.bin
-          # Bootloader and partitions (names may vary across PIO versions)
           BOOT=$(ls "$BUILD_DIR"/bootloader*.bin | head -n1 || true)
           PART=$(ls "$BUILD_DIR"/partitions*.bin | head -n1 || true)
           if [ -n "$BOOT" ] && [ -n "$PART" ]; then
             cp "$BOOT" dist/bootloader.bin
             cp "$PART" dist/partitions.bin
-            # Create a merged flashable image (optional convenience)
             esptool.py --chip esp32 merge_bin               -o dist/spotweldingplus-merged.bin               --flash_mode dio --flash_freq 40m --flash_size 4MB               0x1000 dist/bootloader.bin 0x8000 dist/partitions.bin 0x10000 dist/spotweldingplus-app.bin
           fi
-          # Helpful extras
           cp "$BUILD_DIR/firmware.elf" dist/spotweldingplus.elf || true
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: spotweldingplus-build-${{ github.run_number }}
-          path: dist/*
-          if-no-files-found: error
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
