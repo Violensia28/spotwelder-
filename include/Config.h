@@ -9,7 +9,7 @@
 #define PRESET_COUNT 99
 
 #ifndef BUILD_VERSION
-#define BUILD_VERSION "Build_2_OTA"
+#define BUILD_VERSION "Build_3_Presets"
 #endif
 
 // SoftAP credentials
