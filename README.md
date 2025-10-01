@@ -1,36 +1,42 @@
-# spotwelding+ (Build #4 — Sensor + Kalibrasi)
+# spotwelding+ (Build #5 — Auto‑Trigger + Guard)
 
-Build #4 menambahkan **halaman Sensor (Vrms, Irms)** dan **Kalibrasi (offset & scale)** untuk ACS712 (arus) dan ZMPT (tegangan), disimpan ke NVS.
+> **Disclaimer**: Fitur ini tidak menggantikan **proteksi hardware** (MCB, fuse, MOV/snubber, SSR rating). Pastikan SOP keselamatan dipatuhi.
 
-## Fitur Utama
-- **Live Sensor**: Vrms & Irms (window ~250 ms)
-- **Kalibrasi**:
-  - **Zero Current / Zero Voltage** (set offset dari kondisi tanpa beban/AC)
-  - **Scale** (A/count, V/count) manual atau **Auto‑Scale** berdasarkan target (mis. 220V)
-  - Disimpan ke **NVS** (persisten)
-- **UI Preset 99 + Filter** tetap ada; **OTA** via `/update`
-- **Non‑blocking loop** (sampling ringan per loop)
+## Fitur Baru
+- **Auto‑Trigger**: siklus las otomatis saat **Irms ≥ I_trig** dan **Vrms ≥ V_cut** stabil beberapa window.
+- **V/I Guard**: tahan saat **Vrms** di bawah **V_cut**, **abort** jika **Irms** melebihi **I_limit** selama siklus.
+- **Cooldown** antar siklus untuk menurunkan inrush/thermal stress.
+- **Event Log** ring buffer (`/api/log`).
 
-## Endpoint
-- `/api/sensor` → `{ vrms, irms, n, win_ms }`
-- `/api/calib/load` → `{ i_off, v_off, i_sc, v_sc }`
-- `/api/calib/zero?ch=i|v` → set offset (ambil 256 sampel)
-- `/api/calib/save?i_sc=..&v_sc=..` → simpan skala
-- `/api/calib/auto_v?target=220` → V_scale dari sinyal saat ini
-- `/api/calib/auto_i?target=10` → I_scale dari sinyal saat ini
+## Default (bisa diubah di UI)
+- Auto‑Trigger: **ON**
+- Guard: **ON**
+- I_trig = **2.0 A**
+- V_cut = **150 V**
+- I_limit = **35 A**
+- Cooldown = **1500 ms**
+- Stable windows = **2** (tiap window ≈ `SENSE_WIN_MS` = 250 ms)
 
-## Prosedur Kalibrasi (Disarankan)
-1) **Zero Voltage**: lepas sumber AC dari ZMPT → klik *Zero Voltage*  
-2) **Zero Current**: tanpa arus pada ACS712 → klik *Zero Current*  
-3) **Auto‑Scale Voltage**: sambungkan AC referensi (mis. 220V) → *Auto‑Scale Voltage (to target)*  
-4) **Auto‑Scale Current**: alirkan arus referensi (mis. clamp meter = 10A) → *Auto‑Scale Current*  
-5) **Save** → nilai tersimpan ke NVS
+## Endpoint Baru
+- `/api/guard/load` → konfigurasi guard
+- `/api/guard/save?auto=0|1&guard=0|1&i_trig=..&v_cut=..&i_lim=..&cd=..&sw=..`
+- `/api/guard/status` → status (ready/hold, cooldown, last event)
+- `/api/log` → array string event log
 
-> **Catatan:** Nilai default `I_scale`/`V_scale` adalah placeholder. Lakukan kalibrasi agar akurat. Performa ADC ESP32 dipengaruhi noise/attenuasi/kabel; gunakan PSU & wiring yang baik.
+## Cara Pakai
+1. **Pastikan Build #4 kalibrasi sudah benar** (Zero & Scale) agar threshold akurat.
+2. Atur **I_trig**, **V_cut**, **I_limit**, **Cooldown**, **Stable windows** di panel **Auto‑Trigger & Guard**.
+3. Aktifkan **Auto‑Trigger** dan **Guard** (default ON) → sistem akan men‑trigger saat arus & tegangan terpenuhi.
+
+## Catatan Teknis
+- Keputusan auto‑trigger berbasis **RMS window** (default 250 ms). Untuk respons lebih cepat, kurangi `SENSE_WIN_MS` (dengan trade‑off noise).
+- **Abort** saat weld: jika `Irms > I_limit` atau `Vrms < V_cut`.
+- **Cooldown** menahan retrigger agar MCB tidak sering trip.
 
 ## Build & Update
 - Flash awal: `spotweldingplus-merged.bin @ 0x0` (Android Flasher)
-- Update berikutnya: **OTA** → unggah `spotweldingplus-app.bin` ke `/update`
+- Update berikutnya: **OTA** unggah `spotweldingplus-app.bin` ke `/update`
 
 ## Keamanan
 - Ganti kredensial OTA di `include/Config.h`.
+- Fitur Guard bersifat **software‑level**; tetap gunakan proteksi hardware.
