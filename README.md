@@ -1,34 +1,31 @@
-# spotwelding+ (Build #2 — OTA)
+# spotwelding+ (Build #3 — Preset 99 + Filter)
 
-Build #2 menambahkan **OTA (Over-The-Air) Web Update** via halaman `/update`.
+Build #3 menambahkan **UI Preset 99** dengan **Filter Grup** + pemilihan preset yang disimpan ke NVS.
 
 ## Fitur
+- **UI Preset 99** dengan filter grup (Ni‑Thin, Ni‑Med, Ni‑Thick, Al, Cu, Custom)
+- **Pemilihan preset** tersimpan (NVS) dan dipakai saat **Trigger**
+- **Non‑blocking FSM** untuk pre‑pulse → gap → main‑pulse
 - **SoftAP only** (SSID `SpotWelder_AP`, Pass `12345678`)
-- **Web UI**: tombol Trigger + Web Audio beep
-- **OTA**: upload file `.bin` langsung dari browser ke `http://192.168.4.1/update`
-  - Basic Auth: `admin` / `admin` (ubah di `include/Config.h`)
-- **Pins**: SSR=GPIO26, ACS712=GPIO34, ZMPT=GPIO35
+- **OTA Update** tetap via `/update`
 
-## Cara OTA
-1. Hubungkan HP/PC ke Wi‑Fi `SpotWelder_AP`
-2. Buka `http://192.168.4.1/update`
-3. Login (default `admin`/`admin`)
-4. Pilih file **spotweldingplus-app.bin** (artifact dari CI/Release)
-5. Klik **Upload** → device akan reboot otomatis
+## Endpoint & UI
+- Web UI: `http://192.168.4.1/` atau `/ui`
+- OTA: `http://192.168.4.1/update` (default `admin/admin`)
+- API: `/api/presets`, `/api/current`, `/api/select?id=NUM`
+- Versi: `/version` → `Build_3_Presets`
 
-## Build Lokal
-- PlatformIO: `Upload` seperti biasa
-- Serial monitor: 115200 baud
+## Catatan Preset
+Preset 1..99 dibuat otomatis berdasarkan level → durasi *(pre, main)* secara terukur:
+- Pre‑pulse: 0..80 ms (naik bertahap)
+- Main pulse: ~70..300 ms (linear bertahap)
+- Gap tetap: 60 ms (sementara)
 
-## CI & Release
-- **CI Build** (manual): menghasilkan artifact
-  - `spotweldingplus-app.bin` ← gunakan untuk OTA
-  - `bootloader.bin`, `partitions.bin`, `spotweldingplus-merged.bin`, `.elf`
-- **Release** (push tag `v*`): publish semua file otomatis
+> Grup digunakan untuk **filter tampilan**; mapping level → grup: 1–20 Ni‑Thin, 21–40 Ni‑Med, 41–60 Ni‑Thick, 61–78 Al, 79–96 Cu, 97–99 Custom.
+
+## Build & Flash
+- PlatformIO upload biasa (atau flash awal via `spotweldingplus-merged.bin @ 0x0`)
+- Update berikutnya: **OTA** unggah `spotweldingplus-app.bin`
 
 ## Keamanan
-Ganti kredensial OTA di `include/Config.h`:
-```c
-#define OTA_USER "admin"
-#define OTA_PASS "admin"
-```
+Ganti kredensial OTA di `include/Config.h` sebelum rilis lapangan.
