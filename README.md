@@ -1,21 +1,34 @@
-# Clean Build Starter (Web UI only, AP-only) — Build #1 Green
+# spotwelding+ (Build #2 — OTA)
 
-Use this starter to create a **clean repo** that compiles on the first try using GitHub Actions.
+Build #2 menambahkan **OTA (Over-The-Air) Web Update** via halaman `/update`.
 
-## Steps
-1. Create a **new GitHub repo** (empty) and upload this ZIP.
-2. Go to **Actions** → Run **Build Firmware**.
-3. Download artifact **firmware.bin**.
-4. Power ESP32 → connect to AP **SPOTWELD+** (pass `weld12345`) → open `http://192.168.4.1/`.
+## Fitur
+- **SoftAP only** (SSID `SpotWelder_AP`, Pass `12345678`)
+- **Web UI**: tombol Trigger + Web Audio beep
+- **OTA**: upload file `.bin` langsung dari browser ke `http://192.168.4.1/update`
+  - Basic Auth: `admin` / `admin` (ubah di `include/Config.h`)
+- **Pins**: SSR=GPIO26, ACS712=GPIO34, ZMPT=GPIO35
 
-## What’s inside
-- `platformio.ini` pinned (`espressif32@6.6.0`) and **restricted `src_filter`** (only builds `main.cpp`, `ui_assets_min.cpp`, `patch_ssr_logger_stub.cpp`).
-- Minimal UI assets in code (`ui_assets_min.*`) to satisfy linker (no external FS).
-- `SSRLog` stub for CSV to avoid logger compile errors.
-- GitHub Actions workflow using `python -m platformio` (no pipx path issues).
+## Cara OTA
+1. Hubungkan HP/PC ke Wi‑Fi `SpotWelder_AP`
+2. Buka `http://192.168.4.1/update`
+3. Login (default `admin`/`admin`)
+4. Pilih file **spotweldingplus-app.bin** (artifact dari CI/Release)
+5. Klik **Upload** → device akan reboot otomatis
 
-## Next
-Once **Build #1** is green, we can:
-- Replace `ui_assets_min.*` with the full modular Web UI assets.
-- Replace `SSRLog` stub with the full implementation.
-- Enable OTA upload and optional WebSockets.
+## Build Lokal
+- PlatformIO: `Upload` seperti biasa
+- Serial monitor: 115200 baud
+
+## CI & Release
+- **CI Build** (manual): menghasilkan artifact
+  - `spotweldingplus-app.bin` ← gunakan untuk OTA
+  - `bootloader.bin`, `partitions.bin`, `spotweldingplus-merged.bin`, `.elf`
+- **Release** (push tag `v*`): publish semua file otomatis
+
+## Keamanan
+Ganti kredensial OTA di `include/Config.h`:
+```c
+#define OTA_USER "admin"
+#define OTA_PASS "admin"
+```
