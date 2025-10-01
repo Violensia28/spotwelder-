@@ -1,0 +1,31 @@
+name: Build Firmware
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install PlatformIO (no pipx)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install platformio
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+      - name: PlatformIO Build
+        run: |
+          python -m platformio pkg update
+          python -m platformio run -e esp32dev
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: .pio/build/esp32dev/firmware.bin
