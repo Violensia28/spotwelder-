@@ -82,7 +82,47 @@ static void makePreset(uint8_t L, Preset &p){
   durationsForLevel(L, p.preMs, p.mainMs);
 }
 
+// ================= Smart AI Structures =================
+struct AiState {
+  bool running = false;
+  float t_mm = 0.10f;         // chosen thickness
+  uint8_t trial = 0;          // 1..AI_MAX_TRIALS
+  // baselines and tuned
+  uint16_t base_pre = 30;     // ms
+  uint16_t base_main = 80;    // ms
+  uint16_t tuned_pre = 30;    // ms
+  uint16_t tuned_main = 80;   // ms
+  // references & band
+  float irms_ref = 0.0f;      // from first trial
+  float E_base = 0.0f, E_low = 0.0f, E_high = 0.0f;
+  // last results
+  String rating = "-";        // BAD/OK/GOOD/BAD-HOT
+  float E_est = 0.0f;
+  float irms_main_avg = 0.0f;
+  float dv_sag = 0.0f;        // Vrms_idle - Vrms_main
+  // internal meas accumulators for PRE/MAIN
+  uint64_t pre_sumSq = 0; uint32_t pre_n = 0;
+  uint64_t main_sumSq = 0; uint32_t main_n = 0;
+  float vrms_idle = 0.0f;     // sampled before weld
+} ai;
+
+// thickness list
+static const float TH_LIST[] = {0.10f,0.12f,0.15f,0.18f,0.20f,0.25f};
+static const int TH_COUNT = 6;
+
+// baseline functions
+static uint16_t base_pre_ms(float t){
+  float v = t * 250.0f; if(v<AI_MIN_PRE_MS) v=AI_MIN_PRE_MS; if(v>AI_MAX_PRE_MS) v=AI_MAX_PRE_MS; return (uint16_t)(v+0.5f);
+}
+static float E_index(float t){
+  if(t<=0.10f) return 1.00f; if(t<=0.12f) return 1.15f; if(t<=0.15f) return 1.35f; if(t<=0.18f) return 1.55f; if(t<=0.20f) return 1.70f; return 2.10f;
+}
+static uint16_t base_main_ms(float t){
+  float v = 80.0f + 120.0f*(E_index(t)-1.0f); if(v<AI_MIN_MAIN_MS) v=AI_MIN_MAIN_MS; if(v>AI_MAX_MAIN_MS) v=AI_MAX_MAIN_MS; return (uint16_t)(v+0.5f);
+}
+
 // ================= HTML UI =================
+// Main index page: NO Smart AI here, only link to Smart page
 static const char indexHtml[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html>
@@ -96,80 +136,26 @@ body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:20px;background:var(--bg
 .btn{font-size:16px;padding:10px 14px;border-radius:10px;border:none;background:var(--btn);color:#fff;cursor:pointer;text-decoration:none;display:inline-block}
 .btn:active{transform:scale(.98)}
 input,select{padding:8px;border-radius:8px;border:1px solid #2a3b63;background:#0f1b3d;color:#fff}
-.card{background:var(--card);padding:16px;border-radius:14px;max-width:1020px;margin:0 auto}
+.card{background:var(--card);padding:16px;border-radius:14px;max-width:980px;margin:0 auto}
 .row{display:flex;gap:12px;flex-wrap:wrap}
 .col{flex:1 1 300px}
 .badge{display:inline-block;padding:4px 8px;border-radius:6px;background:#0f3460;}
 small{opacity:.7}
 hr{border:0;border-top:1px solid #2a3b63;margin:14px 0}
-table{width:100%;border-collapse:collapse;margin-top:8px}
-th,td{border-bottom:1px solid #2a3b63;padding:8px;text-align:left}
-.switch{display:inline-flex;align-items:center;gap:8px}
 </style>
 <script>
-let presets=[]; let current=1; let grp=''; let q='';
-async function load(){
-  const pv = await fetch('/api/presets'); presets=await pv.json();
-  const cv = await fetch('/api/current'); const cx = await cv.json(); current=cx.id;
-  await loadGuard();
-  document.getElementById('ver').textContent='%v%';
-  renderPresets();
-  poll(); setInterval(poll, 600);
-}
-function renderPresets(){
-  const tbody = document.getElementById('tbody'); tbody.innerHTML='';
-  const view = presets.filter(p=> (grp? p.group===grp:true) && (q? (p.name.toLowerCase().includes(q)||String(p.id).includes(q)) : true));
-  for(const p of view){
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${p.id}</td><td>${p.name}</td><td>${p.group}</td><td>${p.preMs} ms</td><td>${p.mainMs} ms</td>`+
-      `<td><button class='btn' onclick='sel(${p.id})'>Select</button></td>`;
-    if(p.id===current){ tr.style.outline='2px solid var(--accent)'; }
-    tbody.appendChild(tr);
-  }
-  document.getElementById('cur').textContent=current;
-}
-async function sel(id){ const r=await fetch('/api/select?id='+id); if(r.ok){ current=id; renderPresets(); beep(); } }
-function setGrp(v){ grp=v; renderPresets(); }
-function setQ(v){ q=v.toLowerCase(); renderPresets(); }
-
+async function load(){ document.getElementById('ver').textContent='%v%'; poll(); setInterval(poll, 600); }
 async function poll(){
   try{
-    const r = await fetch('/api/sensor'); const s = await r.json();
+    const s = await (await fetch('/api/sensor')).json();
     id('vrms').textContent = s.vrms.toFixed(1)+' V';
     id('irms').textContent = s.irms.toFixed(2)+' A';
-    id('samples').textContent = s.n + ' samp / '+ s.win_ms +' ms';
     const g = await (await fetch('/api/guard/status')).json();
     id('auto_state').textContent = g.auto_en?'ON':'OFF';
     id('guard_state').textContent = g.guard_en?'ON':'OFF';
-    id('cool').textContent = g.cooldown_ms+' ms';
-    id('stable').textContent = g.stable_win+' win';
     id('ready').textContent = g.ready? 'READY' : 'HOLD';
-    id('last').textContent = g.last;
   }catch(e){console.log(e)}
 }
-
-async function loadGuard(){
-  const g = await (await fetch('/api/guard/load')).json();
-  id('auto_en').checked = g.auto_en; id('guard_en').checked = g.guard_en;
-  id('i_trig').value = g.i_trig.toFixed(2);
-  id('v_cut').value = g.v_cut.toFixed(1);
-  id('i_lim').value = g.i_lim.toFixed(1);
-  id('cd').value = g.cooldown_ms;
-  id('sw').value = g.stable_win;
-}
-async function saveGuard(){
-  const p = new URLSearchParams({
-    auto: id('auto_en').checked? '1':'0',
-    guard: id('guard_en').checked? '1':'0',
-    i_trig: id('i_trig').value,
-    v_cut: id('v_cut').value,
-    i_lim: id('i_lim').value,
-    cd: id('cd').value,
-    sw: id('sw').value
-  });
-  const r = await fetch('/api/guard/save?'+p.toString()); if(r.ok){ beep(); await loadGuard(); }
-}
-
 function id(s){return document.getElementById(s)}
 function beep(){try{const c=new (window.AudioContext||window.webkitAudioContext)();const o=c.createOscillator();const g=c.createGain();o.type='square';o.frequency.value=720;g.gain.value=0.05;o.connect(g);g.connect(c.destination);o.start();setTimeout(()=>o.stop(),140);}catch(e){}}
 async function trig(){ const r=await fetch('/trigger'); const t=await r.text(); beep(); id('status').textContent=t; }
@@ -180,41 +166,87 @@ async function trig(){ const r=await fetch('/trigger'); const t=await r.text(); 
     <h2>SpotWelder+ <span class="badge" id="ver"></span></h2>
     <div class="row">
       <div class="col">
-        <p><b>Trigger</b> (preset: <span id="cur">-</span>)</p>
+        <p><b>Trigger</b></p>
         <button class="btn" onclick="trig()">Trigger Weld</button>
         <p id="status"><small>Ready.</small></p>
         <hr>
         <p>OTA Update:</p>
         <a class="btn" href="/update">Open OTA Updater</a>
+        <hr>
+        <p>Smart AI Spot:</p>
+        <a class="btn" href="/smart">Open Smart Page</a>
       </div>
       <div class="col">
         <p><b>Live Sensor</b></p>
         <div>Vrms: <b id="vrms">-</b></div>
         <div>Irms: <b id="irms">-</b></div>
-        <small id="samples">-</small>
-      </div>
-      <div class="col">
-        <p><b>Auto‑Trigger & Guard</b></p>
-        <div class="switch"><input type="checkbox" id="auto_en"> <label for="auto_en">Auto‑Trigger</label></div>
-        <div class="switch"><input type="checkbox" id="guard_en"> <label for="guard_en">V/I Guard</label></div>
-        <div style="margin-top:8px">
-          <div>I trig (A): <input id="i_trig" style="width:120px"></div>
-          <div>V cutoff (V): <input id="v_cut" style="width:120px"></div>
-          <div>I limit (A): <input id="i_lim" style="width:120px"></div>
-          <div>Cooldown (ms): <input id="cd" style="width:120px"></div>
-          <div>Stable windows: <input id="sw" style="width:120px"></div>
-        </div>
-        <p style="margin-top:8px"><button class="btn" onclick="saveGuard()">Save Guard</button></p>
-        <small>Status: auto=<b id="auto_state">-</b>, guard=<b id="guard_state">-</b>, ready=<b id="ready">-</b>, cd=<b id="cool">-</b>, sw=<b id="stable">-</b></small>
-        <div style="margin-top:6px"><small>Last: <span id="last">-</span></small></div>
+        <small>Status: auto=<b id="auto_state">-</b>, guard=<b id="guard_state">-</b>, ready=<b id="ready">-</b></small>
       </div>
     </div>
-    <hr>
-    <h3>Preset Table</h3>
-    <table>
-      <thead><tr><th>ID</th><th>Nama</th><th>Grup</th><th>Pre</th><th>Main</th><th></th></tr></thead>
-      <tbody id="tbody"></tbody>
-    </table>
+  </div>
+</body>
+</html>
+)rawliteral";
+
+// Smart page (separate)
+static const char smartHtml[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Smart AI Spot — %v%</title>
+<style>
+:root{--bg:#0b132b;--card:#1b2a49;--fg:#e0e0e0;--btn:#1c2541;--accent:#5bc0be}
+*{box-sizing:border-box}
+body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:20px;background:var(--bg);color:var(--fg)}
+.btn{font-size:16px;padding:10px 14px;border-radius:10px;border:none;background:var(--btn);color:#fff;cursor:pointer;text-decoration:none;display:inline-block}
+.btn:active{transform:scale(.98)}
+input,select{padding:8px;border-radius:8px;border:1px solid #2a3b63;background:#0f1b3d;color:#fff}
+.card{background:var(--card);padding:16px;border-radius:14px;max-width:1100px;margin:0 auto}
+.row{display:flex;gap:12px;flex-wrap:wrap}
+.col{flex:1 1 320px}
+.badge{display:inline-block;padding:4px 8px;border-radius:6px;background:#0f3460;}
+small{opacity:.7}
+hr{border:0;border-top:1px solid #2a3b63;margin:14px 0}
+.tag{padding:3px 8px;border-radius:8px;background:#0f3460;display:inline-block}
+</style>
+<script>
+async function load(){ document.getElementById('ver').textContent='%v%'; await smartLoad(); poll(); setInterval(poll, 600); }
+async function poll(){ try{ const st = await (await fetch('/smart/status')).json(); id('ai_state').textContent = st.running ? 'RUNNING' : 'IDLE'; id('ai_th').textContent = st.t_mm.toFixed(2)+' mm'; id('ai_rating').textContent = st.rating; id('ai_trial').textContent = st.trial; id('ai_pre').textContent = st.tuned_pre + ' ms'; id('ai_main').textContent = st.tuned_main + ' ms'; id('ai_E').textContent = st.E_est.toFixed(1); id('ai_irms').textContent = st.irms_main_avg.toFixed(2)+' A'; }catch(e){console.log(e)} }
+async function smartLoad(){ const o = await (await fetch('/smart/options')).json(); const sel = id('th'); sel.innerHTML=''; for(const t of o.thickness){ const opt=document.createElement('option'); opt.value=t; opt.text=t.toFixed(2)+' mm'; sel.appendChild(opt); } const c = await (await fetch('/smart/config')).json(); sel.value = c.t_mm; id('base_pre').textContent = c.base_pre+' ms'; id('base_main').textContent = c.base_main+' ms'; id('tuned_pre').textContent = c.tuned_pre+' ms'; id('tuned_main').textContent = c.tuned_main+' ms'; }
+async function smartSet(){ const t = id('th').value; await fetch('/smart/config', {method:'POST', body: new URLSearchParams({t_mm:t})}); await smartLoad(); beep(); }
+async function smartStart(){ await fetch('/smart/start', {method:'POST'}); beep(); }
+async function smartStop(){ await fetch('/smart/stop', {method:'POST'}); beep(); }
+async function smartApply(){ await fetch('/smart/apply', {method:'POST'}); beep(); }
+function id(s){return document.getElementById(s)}
+function beep(){try{const c=new (window.AudioContext||window.webkitAudioContext)();const o=c.createOscillator();const g=c.createGain();o.type='square';o.frequency.value=720;g.gain.value=0.05;o.connect(g);g.connect(c.destination);o.start();setTimeout(()=>o.stop(),140);}catch(e){}}
+</script>
+</head>
+<body onload="load()">
+  <div class="card">
+    <h2>Smart AI Spot <span class="badge" id="ver"></span></h2>
+    <p><a class="btn" href="/">◀ Back to Home</a></p>
+    <div class="row">
+      <div class="col">
+        <p><b>Material</b>: Nickel</p>
+        <p><b>Thickness</b>:
+          <select id="th" onchange="smartSet()"></select>
+        </p>
+        <p>Baseline: pre=<b id="base_pre">-</b>, main=<b id="base_main">-</b></p>
+        <p>Tuned (saved): pre=<b id="tuned_pre">-</b>, main=<b id="tuned_main">-</b></p>
+        <p>
+          <button class="btn" onclick="smartStart()">Start Auto‑Tune</button>
+          <button class="btn" onclick="smartStop()">Stop</button>
+          <button class="btn" onclick="smartApply()">Apply Tuned</button>
+        </p>
+      </div>
+      <div class="col">
+        <p><b>Last Result</b> — Rating: <b id="ai_rating">-</b> (trial <b id="ai_trial">-</b>)</p>
+        <div>pre=<b id="ai_pre">-</b>, main=<b id="ai_main">-</b></div>
+        <div>E_est=<b id="ai_E">-</b>, Irms(main)=<b id="ai_irms">-</b></div>
+        <small>AI akan mengubah durasi ±5–20% hingga GOOD.</small>
+      </div>
+    </div>
   </div>
 </body>
 </html>
@@ -267,7 +299,7 @@ void loadSelected(){
   cooldownMs = prefs.getUInt("cool_ms", DEF_COOLDOWN_MS);
   stableWinReq = (uint8_t)prefs.getUChar("stb_win", DEF_STABLE_WIN);
   prefs.end();
-  // apply durations from preset
+  // apply durations from selected preset (legacy)
   Preset p; makePreset(g_selectedPreset, p);
   g_preMs = p.preMs; g_mainMs = p.mainMs; g_gapMs = 60;
 }
@@ -303,11 +335,9 @@ void sensorLoop(){
     Irms = i_counts * I_scale;
     Vrms = v_counts * V_scale;
 
-    // Auto-trigger window logic
     bool above = (Irms >= I_trig_A) && (Vrms >= V_cut_V);
     if(above) stableCnt++; else stableCnt = 0;
 
-    // reset window accumulators
     accI = {0,0,0}; accV = {0,0,0};
     winStart = now;
   }
@@ -317,12 +347,8 @@ void sensorLoop(){
 bool canTrigger(){
   if(!auto_en) return false;
   if(g_state != IDLE) return false;
-  if(guard_en){
-    if(Vrms < V_cut_V) return false; // undervoltage hold
-  }
-  // cooldown
+  if(guard_en){ if(Vrms < V_cut_V) return false; }
   if(millis() - lastWeldEnd < cooldownMs) return false;
-  // stability
   if(stableCnt < stableWinReq) return false;
   return true;
 }
@@ -332,6 +358,67 @@ void abortWeld(const char* reason){
   g_state = IDLE;
   addLog(String("ABORT: ")+reason);
 }
+
+// ================= Smart AI Core =================
+void aiComputeBands(){
+  // compute base durations
+  ai.base_pre = base_pre_ms(ai.t_mm);
+  ai.base_main = base_main_ms(ai.t_mm);
+  // load tuned if exists
+  prefs.begin("swp", true);
+  char kpre[24]; char kmain[24];
+  snprintf(kpre, sizeof(kpre), "smart_%.2f_pre", ai.t_mm);
+  snprintf(kmain, sizeof(kmain), "smart_%.2f_main", ai.t_mm);
+  uint16_t tp = prefs.getUShort(kpre, ai.base_pre);
+  uint16_t tm = prefs.getUShort(kmain, ai.base_main);
+  prefs.end();
+  ai.tuned_pre = tp; ai.tuned_main = tm;
+}
+
+void aiSaveTuned(){
+  prefs.begin("swp", false);
+  char kpre[24]; char kmain[24];
+  snprintf(kpre, sizeof(kpre), "smart_%.2f_pre", ai.t_mm);
+  snprintf(kmain, sizeof(kmain), "smart_%.2f_main", ai.t_mm);
+  prefs.putUShort(kpre, ai.tuned_pre);
+  prefs.putUShort(kmain, ai.tuned_main);
+  prefs.end();
+}
+
+void aiStart(){ ai.running = true; ai.trial = 0; ai.rating = "-"; ai.E_est = 0; ai.irms_main_avg = 0; ai.dv_sag = 0; aiComputeBands(); }
+void aiStop(){ ai.running = false; }
+
+void aiPreCycle(){ /* reserved for future sub-window sampling */ }
+
+void aiPostCycle(){
+  // est from global Irms (main-only estimate is simplified here)
+  float i_main = Irms; // simplified; can be refined with phase window
+  ai.irms_main_avg = i_main;
+  if(ai.trial==1){
+    ai.irms_ref = (i_main>0? i_main: 10.0f);
+    float E_base = ai.irms_ref * (ai.base_pre + ai.base_main);
+    ai.E_base = E_base; ai.E_low = AI_BAND_LOW*E_base; ai.E_high = AI_BAND_HIGH*E_base;
+  }
+  ai.E_est = i_main * (ai.tuned_pre + ai.tuned_main);
+  bool aborted = false; String last = logBuf[(logIdx+LOGN-1)%LOGN]; if(last.startsWith("ABORT:")) aborted = true;
+  if(aborted || ai.E_est > ai.E_high){
+    ai.rating = "BAD-HOT";
+    ai.tuned_main = (uint16_t) fmaxf(AI_MIN_MAIN_MS, (float)ai.tuned_main * (1.0f - AI_DOWN_MAIN_PCT));
+  } else if(ai.E_est < ai.E_low){
+    ai.rating = "BAD";
+    ai.tuned_main = (uint16_t) fminf(AI_MAX_MAIN_MS, (float)ai.tuned_main * (1.0f + AI_UP_MAIN_PCT));
+    ai.tuned_pre  = (uint16_t) fminf(AI_MAX_PRE_MS,  (float)ai.tuned_pre  * (1.0f + AI_UP_PRE_PCT));
+  } else {
+    ai.rating = "GOOD";
+    float center = 0.5f*(ai.E_low + ai.E_high);
+    if(ai.E_est < center){ ai.tuned_main = (uint16_t) fminf(AI_MAX_MAIN_MS, (float)ai.tuned_main * (1.0f + AI_FINE_PCT)); }
+    else { ai.tuned_main = (uint16_t) fmaxf(AI_MIN_MAIN_MS, (float)ai.tuned_main * (1.0f - AI_FINE_PCT)); }
+  }
+  if(ai.tuned_pre<AI_MIN_PRE_MS) ai.tuned_pre=AI_MIN_PRE_MS; if(ai.tuned_pre>AI_MAX_PRE_MS) ai.tuned_pre=AI_MAX_PRE_MS;
+  if(ai.tuned_main<AI_MIN_MAIN_MS) ai.tuned_main=AI_MIN_MAIN_MS; if(ai.tuned_main>AI_MAX_MAIN_MS) ai.tuned_main=AI_MAX_MAIN_MS;
+}
+
+void aiApplyToFsm(){ /* Smart durations used only when AI running or after Apply (via manual set) */ }
 
 // ================= API Routes =================
 void respondJsonPresets(){
@@ -355,100 +442,32 @@ void handleCurrent(){ server.send(200, "application/json", String("{\"id\":"+Str
 
 void handleSelect(){ if(!server.hasArg("id")){ server.send(400, "text/plain", "missing id"); return;} int id = server.arg("id").toInt(); if(id<1||id>99){ server.send(400, "text/plain", "bad id"); return;} g_selectedPreset = (uint8_t)id; saveSelected(); Preset p; makePreset(g_selectedPreset,p); g_preMs = p.preMs; g_mainMs = p.mainMs; server.send(200, "text/plain", "OK"); }
 
-void handleSensor(){
-  String out = "{";
-  out += "\"vrms\":" + String(Vrms, 3) + ",";
-  out += "\"irms\":" + String(Irms, 3) + ",";
-  out += "\"n\":" + String(accI.n + accV.n) + ",";
-  out += "\"win_ms\":" + String((uint32_t)SENSE_WIN_MS);
-  out += "}";
-  server.send(200, "application/json", out);
-}
+void handleSensor(){ String out = "{"; out += "\"vrms\":" + String(Vrms, 3) + ","; out += "\"irms\":" + String(Irms, 3) + ","; out += "\"n\":" + String(accI.n + accV.n) + ","; out += "\"win_ms\":" + String((uint32_t)SENSE_WIN_MS); out += "}"; server.send(200, "application/json", out); }
 
-void handleGuardLoad(){
-  String out = "{";
-  out += "\"auto_en\":" + String(auto_en?1:0) + ",";
-  out += "\"guard_en\":" + String(guard_en?1:0) + ",";
-  out += "\"i_trig\":" + String(I_trig_A,2) + ",";
-  out += "\"v_cut\":" + String(V_cut_V,1) + ",";
-  out += "\"i_lim\":" + String(I_lim_A,1) + ",";
-  out += "\"cooldown_ms\":" + String(cooldownMs) + ",";
-  out += "\"stable_win\":" + String(stableWinReq);
-  out += "}";
-  server.send(200, "application/json", out);
-}
+void handleGuardLoad(){ String out = "{"; out += "\"auto_en\":" + String(auto_en?1:0) + ","; out += "\"guard_en\":" + String(guard_en?1:0) + ","; out += "\"i_trig\":" + String(I_trig_A,2) + ","; out += "\"v_cut\":" + String(V_cut_V,1) + ","; out += "\"i_lim\":" + String(I_lim_A,1) + ","; out += "\"cooldown_ms\":" + String(cooldownMs) + ","; out += "\"stable_win\":" + String(stableWinReq); out += "}"; server.send(200, "application/json", out); }
 
-void handleGuardSave(){
-  if(server.hasArg("auto")) auto_en = (server.arg("auto")=="1");
-  if(server.hasArg("guard")) guard_en = (server.arg("guard")=="1");
-  if(server.hasArg("i_trig")) I_trig_A = server.arg("i_trig").toFloat();
-  if(server.hasArg("v_cut"))  V_cut_V  = server.arg("v_cut").toFloat();
-  if(server.hasArg("i_lim"))  I_lim_A  = server.arg("i_lim").toFloat();
-  if(server.hasArg("cd"))     cooldownMs = server.arg("cd").toInt();
-  if(server.hasArg("sw"))     stableWinReq = (uint8_t)server.arg("sw").toInt();
-  saveGuard();
-  server.send(200, "text/plain", "OK");
-}
+void handleGuardSave(){ if(server.hasArg("auto")) auto_en = (server.arg("auto")=="1"); if(server.hasArg("guard")) guard_en = (server.arg("guard")=="1"); if(server.hasArg("i_trig")) I_trig_A = server.arg("i_trig").toFloat(); if(server.hasArg("v_cut"))  V_cut_V  = server.arg("v_cut").toFloat(); if(server.hasArg("i_lim"))  I_lim_A  = server.arg("i_lim").toFloat(); if(server.hasArg("cd"))     cooldownMs = server.arg("cd").toInt(); if(server.hasArg("sw"))     stableWinReq = (uint8_t)server.arg("sw").toInt(); saveGuard(); server.send(200, "text/plain", "OK"); }
 
-void handleGuardStatus(){
-  bool ready = canTrigger();
-  String out = "{";
-  out += "\"auto_en\":" + String(auto_en?1:0) + ",";
-  out += "\"guard_en\":" + String(guard_en?1:0) + ",";
-  out += "\"cooldown_ms\":" + String(cooldownMs) + ",";
-  out += "\"stable_win\":" + String(stableWinReq) + ",";
-  out += "\"ready\":" + String(ready?1:0) + ",";
-  out += "\"last\":\"" + (logBuf[(logIdx+LOGN-1)%LOGN]) + "\"";
-  out += "}";
-  server.send(200, "application/json", out);
-}
+void handleGuardStatus(){ bool ready = canTrigger(); String out = "{"; out += "\"auto_en\":" + String(auto_en?1:0) + ","; out += "\"guard_en\":" + String(guard_en?1:0) + ","; out += "\"cooldown_ms\":" + String(cooldownMs) + ","; out += "\"stable_win\":" + String(stableWinReq) + ","; out += "\"ready\":" + String(ready?1:0) + ","; out += "\"last\":\"" + (logBuf[(logIdx+LOGN-1)%LOGN]) + "\""; out += "}"; server.send(200, "application/json", out); }
 
-void handleLog(){
-  String out = "[";
-  for(int i=0;i<LOGN;i++){
-    int idx = (logIdx + i) % LOGN;
-    if(i>0) out += ",";
-    out += "\"" + logBuf[idx] + "\"";
-  }
-  out += "]";
-  server.send(200, "application/json", out);
-}
+// ---- Smart API ----
+void smartOptions(){ String out = "{\"thickness\":["; for(int i=0;i<TH_COUNT;i++){ if(i) out+=","; out += String(TH_LIST[i],2); } out += "]}"; server.send(200, "application/json", out); }
+void smartConfigGet(){ aiComputeBands(); String out = "{"; out += "\"t_mm\":"+String(ai.t_mm,2)+","; out += "\"base_pre\":"+String(ai.base_pre)+","; out += "\"base_main\":"+String(ai.base_main)+","; out += "\"tuned_pre\":"+String(ai.tuned_pre)+","; out += "\"tuned_main\":"+String(ai.tuned_main); out += "}"; server.send(200, "application/json", out); }
+void smartConfigPost(){ if(server.hasArg("t_mm")) ai.t_mm = server.arg("t_mm").toFloat(); aiComputeBands(); server.send(200, "text/plain", "OK"); }
+void smartStart(){ aiStart(); server.send(200, "text/plain", "OK"); }
+void smartStop(){ aiStop(); server.send(200, "text/plain", "OK"); }
+void smartApply(){ aiSaveTuned(); g_preMs = ai.tuned_pre; g_mainMs = ai.tuned_main; server.send(200, "text/plain", "OK"); }
+void smartStatus(){ String out="{"; out += "\"running\":" + String(ai.running?1:0) + ","; out += "\"t_mm\":" + String(ai.t_mm,2) + ","; out += "\"trial\":" + String(ai.trial) + ","; out += "\"rating\":\"" + ai.rating + "\","; out += "\"tuned_pre\":" + String(ai.tuned_pre) + ","; out += "\"tuned_main\":" + String(ai.tuned_main) + ","; out += "\"E_est\":" + String(ai.E_est,1) + ","; out += "\"irms_main_avg\":" + String(ai.irms_main_avg,2); out += "}"; server.send(200, "application/json", out); }
 
 // ================= Trigger & FSM =================
-void startWeld(){
-  if(g_state!=IDLE) return;
-  g_state = (g_preMs>0? PRE_PULSE: MAIN_PULSE);
-  g_t0 = millis();
-  digitalWrite(SSR_PIN, (g_state!=IDLE));
-  addLog("WELD START");
-}
+void startWeld(){ if(g_state!=IDLE) return; g_state = (g_preMs>0? PRE_PULSE: MAIN_PULSE); g_t0 = millis(); if(ai.running) aiPreCycle(); digitalWrite(SSR_PIN, (g_state!=IDLE)); addLog("WELD START"); }
 
-void fsmLoop(){
-  unsigned long t = millis();
-  // Guards during weld
-  if(guard_en && g_state != IDLE){
-    if(Irms > I_lim_A){ abortWeld("OverCurrent"); lastWeldEnd = millis(); return; }
-    if(Vrms < V_cut_V){ abortWeld("UnderVoltage"); lastWeldEnd = millis(); return; }
-  }
-
+void fsmLoop(){ unsigned long t = millis(); if(guard_en && g_state != IDLE){ if(Irms > I_lim_A){ abortWeld("OverCurrent"); lastWeldEnd = millis(); return; } if(Vrms < V_cut_V){ abortWeld("UnderVoltage"); lastWeldEnd = millis(); return; } }
   switch(g_state){
-    case IDLE:
-      // Auto trigger decision in IDLE
-      if(canTrigger()){
-        stableCnt = 0; // consume stability
-        startWeld();
-      }
-      break;
-    case PRE_PULSE:
-      if(t - g_t0 >= g_preMs){ digitalWrite(SSR_PIN, LOW); g_state = GAP; g_t0 = t; }
-      break;
-    case GAP:
-      if(t - g_t0 >= g_gapMs){ g_state = MAIN_PULSE; g_t0 = t; digitalWrite(SSR_PIN, HIGH); }
-      break;
-    case MAIN_PULSE:
-      if(t - g_t0 >= g_mainMs){ digitalWrite(SSR_PIN, LOW); g_state = IDLE; lastWeldEnd = millis(); addLog("WELD END"); }
-      break;
-  }
+    case IDLE: if(canTrigger()){ stableCnt = 0; startWeld(); } break;
+    case PRE_PULSE: if(t - g_t0 >= g_preMs){ digitalWrite(SSR_PIN, LOW); g_state = GAP; g_t0 = t; } break;
+    case GAP: if(t - g_t0 >= g_gapMs){ g_state = MAIN_PULSE; g_t0 = t; digitalWrite(SSR_PIN, HIGH); } break;
+    case MAIN_PULSE: if(t - g_t0 >= g_mainMs){ digitalWrite(SSR_PIN, LOW); g_state = IDLE; lastWeldEnd = millis(); addLog("WELD END"); if(ai.running){ ai.trial++; aiPostCycle(); if(ai.rating=="GOOD" || ai.trial>=AI_MAX_TRIALS){ aiSaveTuned(); ai.running=false; } } } break; }
 }
 
 void handleTrigger(){ startWeld(); server.send(200, "text/plain", "Weld cycle started"); }
@@ -459,6 +478,7 @@ void setup(){
   pinMode(SSR_PIN, OUTPUT); digitalWrite(SSR_PIN, LOW);
   loadSelected();
   sensorInit();
+  aiComputeBands();
 
   WiFi.mode(WIFI_AP);
   bool ok = WiFi.softAP(AP_SSID, AP_PASS, 1, 0, 4);
@@ -468,6 +488,9 @@ void setup(){
 
   server.on("/", [](){ server.send(200, "text/html", applyVersion(indexHtml)); });
   server.on("/ui", [](){ server.send(200, "text/html", applyVersion(indexHtml)); });
+  server.on("/smart", [](){ server.send(200, "text/html", applyVersion(smartHtml)); });
+  server.on("/smart/", [](){ server.sendHeader("Location","/smart"); server.send(302, "text/plain", ""); });
+
   server.on("/trigger", handleTrigger);
   server.on("/version", [](){ server.send(200, "text/plain", BUILD_VERSION); });
   // Preset/API
@@ -480,7 +503,14 @@ void setup(){
   server.on("/api/guard/load", HTTP_GET, handleGuardLoad);
   server.on("/api/guard/save", HTTP_GET, handleGuardSave);
   server.on("/api/guard/status", HTTP_GET, handleGuardStatus);
-  server.on("/api/log", HTTP_GET, handleLog);
+  // Smart/API
+  server.on("/smart/options", HTTP_GET, smartOptions);
+  server.on("/smart/config", HTTP_GET, smartConfigGet);
+  server.on("/smart/config", HTTP_POST, smartConfigPost);
+  server.on("/smart/start", HTTP_POST, smartStart);
+  server.on("/smart/stop",  HTTP_POST, smartStop);
+  server.on("/smart/apply", HTTP_POST, smartApply);
+  server.on("/smart/status", HTTP_GET, smartStatus);
   // OTA
   server.on("/update", HTTP_GET, [](){ if(!server.authenticate(OTA_USER, OTA_PASS)) return server.requestAuthentication(); server.send(200, "text/html", updateHtml); });
   server.on("/update", HTTP_POST, [](){ if(!server.authenticate(OTA_USER, OTA_PASS)) return server.requestAuthentication(); bool ok=!Update.hasError(); server.sendHeader("Connection","close"); server.send(200, "text/plain", ok?"OK":"FAIL"); delay(200); ESP.restart(); },
