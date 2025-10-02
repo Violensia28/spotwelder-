@@ -2,16 +2,15 @@
 #include <Arduino.h>
 #include <WebServer.h>
 
-extern WebServer server; // already defined in your project
+extern WebServer server; // defined in your project
 
-// Minimal implementations so build succeeds without changing your logic
 void smartHistoryJson(){
-  // Return empty list if your code doesn't push history yet
   server.send(200, "application/json", "[]");
 }
 
 void smartHistoryCsv(){
-  // Return only CSV header line (no rows)
-  server.send(200, "text/csv", "ms,t_mm,pre_ms,main_ms,E_est,irms,rating
-");
+  // PROGMEM single-line literal to avoid accidental line breaks
+  static const char CSV_HEADER[] PROGMEM = "ms,t_mm,pre_ms,main_ms,E_est,irms,rating
+";
+  server.send_P(200, "text/csv", CSV_HEADER);
 }
