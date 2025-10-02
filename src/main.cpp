@@ -21,6 +21,10 @@ extern AiHistEntry hist[];
 extern uint8_t histCount, histHead;
 #define AI_HIST_MAX 32
 
+// HOTFIX 7.0.1 — forward declarations for handlers used in setup()
+void smartHistoryJson();
+void smartHistoryCsv();
+
 void setup() {
     // ... existing setup code ...
 
