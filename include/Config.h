@@ -11,7 +11,7 @@
 #define PRESET_COUNT 99
 
 #ifndef BUILD_VERSION
-#define BUILD_VERSION "Build_6_1_SmartPage"
+#define BUILD_VERSION "Build_6_2_ModeHistory"
 #endif
 
 // ==== Wi-Fi / OTA ====
@@ -50,5 +50,12 @@
 #define AI_MAX_MAIN_MS   300
 #define AI_BAND_LOW      0.90f   // 90% of base energy
 #define AI_BAND_HIGH     1.10f   // 110% of base energy
+
+// ==== Mode & History ====
+#define MODE_PRESET 0
+#define MODE_SMART  1
+#define DEF_OP_MODE MODE_PRESET   // default startup mode
+
+#define AI_HIST_MAX 32
 
 #endif
