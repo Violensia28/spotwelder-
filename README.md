@@ -1,28 +1,40 @@
-# spotwelding+ (Build 6.2.2 — Spot Pattern + Gap)
+# spotwelding+ (Build 7 — Detail Logging)
 
-Build 6.2.2 menambahkan **Spot Pattern selector** (Single / Double) dan **Gap editor** (persist **NVS**) yang berlaku di **keduanya**: Mode **PRESET** maupun **SMART**.
+**Build 7** menambahkan **pencatatan detail per siklus weld** (RAM ring buffer, JSON/CSV download) tanpa memerlukan filesystem.
 
 ## Fitur Baru
-- **Spot Pattern** (`/api/weldcfg`)
-  - `SINGLE` → memaksa `pre_ms = 0` (efektif single pulse)
-  - `DOUBLE` → gunakan `pre_ms` dari PRESET/SMART (double pulse)
-- **Gap (ms)** disimpan di NVS (`w_gap`) dan dipakai saat `pre_ms > 0`.
-- **UI**: Home **dan** `/smart` punya panel **Spot Pattern + Gap**.
+- **Detail Weld Log** (ring buffer `LOG_MAX=256`):
+  - `ts_ms`, `result` (DONE / ABORT_OC / ABORT_UV)
+  - `mode` (PRESET/SMART), `pattern` (SINGLE/DOUBLE)
+  - `preset_id`, `t_mm` (SMART)
+  - `pre_ms`, `gap_ms`, `main_ms`
+  - **Baseline**: `vrms_idle`, `irms_idle`
+  - **Pre stats**: `pre_irms_avg`, `pre_irms_max`, `pre_vrms_min`
+  - **Main stats**: `main_irms_avg`, `main_irms_max`, `main_vrms_min`
+  - **Guard** thresholds: `i_trig`, `v_cut`, `i_lim`
+  - **AI** `rating` (jika ada)
+- **API Log**:
+  - `GET /log/summary` → JSON latest first
+  - `GET /log.csv` → unduh CSV
+  - `POST /log/clear` → kosongkan log
+- **UI**:
+  - **Home**: kartu **Weld Logs** (tabel ringkas, tombol **Clear**, link **Download CSV**)
+  - **/smart**: link **Download Weld Logs CSV** + tabel ringkas
 
-## Endpoint Baru
-```http
-GET  /api/weldcfg                 # → {"pattern":"SINGLE|DOUBLE","gap_ms":60}
-POST /api/weldcfg?pattern=DOUBLE&gap_ms=60
-```
+## Cara Kerja (ringkas)
+- Saat **START**: simpan `vrms_idle` & `irms_idle`, reset akumulator fase.
+- Saat **PRE/MAIN**: akumulasi `Irms` rata-rata & puncak, `Vrms` minimum (indikasi sag). 
+- Saat **ABORT** (OC/UV) atau **END**: buat entri **WeldLogEntry** → push ke ring buffer.
 
-## Integrasi
-- **Operation Mode** tetap ada (`/api/mode` PRESET ↔ SMART)
-- **Smart AI** tetap bekerja; hasil tuned dipakai penuh saat `pattern=DOUBLE`, atau pre dipaksa 0 saat `pattern=SINGLE`.
-- **Guard** & **Auto‑Trigger** tetap aktif.
+## Endpoint Terkait Lain (dari Build 6.2.2)
+- Mode operasi: `GET/POST /api/mode` (PRESET ↔ SMART)
+- Spot Pattern & Gap: `GET/POST /api/weldcfg`
+- Smart AI: `/smart/*` (options, config, start/stop/apply, status, history & CSV)
+- Guard: `/api/guard/*` (load/save/status)
+- Sensor: `/api/sensor`
+- OTA: `/update`
 
 ## Build & Update
-- **OTA**: upload `spotweldingplus-app.bin` ke `/update`
-- **Fresh/Recovery**: `spotweldingplus-merged.bin @ 0x0`
-
-## Versi
-- `/version` → `Build_6_2_2_SpotPattern`
+- OTA: unggah `spotweldingplus-app.bin` ke `/update`.
+- Fresh/Recovery: flash `spotweldingplus-merged.bin @ 0x0`.
+- Cek versi: `/version` → `Build_7_DetailLogging`.
