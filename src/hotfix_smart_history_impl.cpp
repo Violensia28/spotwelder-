@@ -1,16 +1,17 @@
+
 #include <Arduino.h>
 #include <WebServer.h>
 
-extern WebServer server; // sudah didefinisikan di project-mu
+extern WebServer server; // already defined in your project
 
-// JSON: kembalikan list kosong agar UI tidak error
-void smartHistoryJson() {
+// Minimal implementations so build succeeds without changing your logic
+void smartHistoryJson(){
+  // Return empty list if your code doesn't push history yet
   server.send(200, "application/json", "[]");
 }
 
-// CSV: hanya header, tanpa baris (aman & minimal)
-void smartHistoryCsv() {
-  static const char* header = "ms,t_mm,pre_ms,main_ms,E_est,irms,rating
-";
-  server.send(200, "text/csv", header);
+void smartHistoryCsv(){
+  // Return only CSV header line (no rows)
+  server.send(200, "text/csv", "ms,t_mm,pre_ms,main_ms,E_est,irms,rating
+");
 }
