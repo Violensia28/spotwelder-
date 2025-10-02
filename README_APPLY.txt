@@ -5,9 +5,10 @@ HOW TO APPLY (GitHub Web):
    - include/hotfix_forward_decls.h
    - src/hotfix_smart_history_impl.cpp
    - platformio.ini  (replace if asked)
-3) Commit. Then build your CI or local PIO.
+3) Commit → run CI or local PlatformIO build.
 
 Notes:
-- We do NOT touch your main.cpp. The header is force-included via build_flags.
-- Endpoints return empty JSON/CSV (safe). Your other features remain unchanged.
-- Version is set to Build_7_0_1_DetailLoggingFix for traceability.
+- No edits to your main.cpp needed.
+- Endpoints return empty JSON and CSV header only (safe placeholder).
+- We use a char array (not a quoted string) to avoid line-break issues when copying.
+- Version set to Build_7_0_1_DetailLoggingFix for traceability.
