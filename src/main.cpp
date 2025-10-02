@@ -5,7 +5,7 @@
 #include <math.h>
 #include "Config.h"
 
-// ---- Forward declarations (route handlers) ----
+// ---- Forward declarations ----
 void respondJsonPresets();
 void handleCurrent();
 void handleSelect();
@@ -26,6 +26,9 @@ void smartApply();
 void smartStatus();
 void smartHistoryJson();
 void smartHistoryCsv();
+void logJson();
+void logCsv();
+void logClear();
 void handleTrigger();
 
 // ================= Globals =================
@@ -33,7 +36,7 @@ WebServer server(80);
 Preferences prefs; // NVS
 
 // Operation mode (0=PRESET, 1=SMART)
-uint8_t opMode = DEF_OP_MODE; // saved at /api/mode
+uint8_t opMode = DEF_OP_MODE;
 
 // Spot Pattern
 uint8_t spotPattern = DEF_SPOT_PATTERN; // 0=SINGLE,1=DOUBLE
@@ -135,68 +138,75 @@ struct AiState {
 struct AiHistEntry { uint32_t ms; float t_mm; uint16_t pre_ms; uint16_t main_ms; float E_est; float irms; char rating[8]; };
 AiHistEntry hist[AI_HIST_MAX];
 uint8_t histCount=0, histHead=0; // ring buffer
-
 void histPush(const AiHistEntry &e){ hist[histHead]=e; histHead=(histHead+1)%AI_HIST_MAX; if(histCount<AI_HIST_MAX) histCount++; }
 
 // thickness list
 static const float TH_LIST[] = {0.10f,0.12f,0.15f,0.18f,0.20f,0.25f};
 static const int TH_COUNT = 6;
 
-// baseline functions
-static uint16_t base_pre_ms(float t){
-  float v = t * 250.0f; if(v<AI_MIN_PRE_MS) v=AI_MIN_PRE_MS; if(v>AI_MAX_PRE_MS) v=AI_MAX_PRE_MS; return (uint16_t)(v+0.5f);
-}
-static float E_index(float t){
-  if(t<=0.10f) return 1.00f; if(t<=0.12f) return 1.15f; if(t<=0.15f) return 1.35f; if(t<=0.18f) return 1.55f; if(t<=0.20f) return 1.70f; return 2.10f;
-}
-static uint16_t base_main_ms(float t){
-  float v = 80.0f + 120.0f*(E_index(t)-1.0f); if(v<AI_MIN_MAIN_MS) v=AI_MIN_MAIN_MS; if(v>AI_MAX_MAIN_MS) v=AI_MAX_MAIN_MS; return (uint16_t)(v+0.5f);
-}
+static uint16_t base_pre_ms(float t){ float v = t * 250.0f; if(v<AI_MIN_PRE_MS) v=AI_MIN_PRE_MS; if(v>AI_MAX_PRE_MS) v=AI_MAX_PRE_MS; return (uint16_t)(v+0.5f); }
+static float E_index(float t){ if(t<=0.10f) return 1.00f; if(t<=0.12f) return 1.15f; if(t<=0.15f) return 1.35f; if(t<=0.18f) return 1.55f; if(t<=0.20f) return 1.70f; return 2.10f; }
+static uint16_t base_main_ms(float t){ float v = 80.0f + 120.0f*(E_index(t)-1.0f); if(v<AI_MIN_MAIN_MS) v=AI_MIN_MAIN_MS; if(v>AI_MAX_MAIN_MS) v=AI_MAX_MAIN_MS; return (uint16_t)(v+0.5f); }
 
-// Load tuned durations for a thickness (fallback to baseline)
-void smartLoadTuned(float tmm, uint16_t &pre, uint16_t &main){
-  char kpre[24]; char kmain[24];
-  snprintf(kpre, sizeof(kpre), "smart_%.2f_pre", tmm);
-  snprintf(kmain, sizeof(kmain), "smart_%.2f_main", tmm);
-  prefs.begin("swp", true);
-  pre  = prefs.getUShort(kpre, base_pre_ms(tmm));
-  main = prefs.getUShort(kmain, base_main_ms(tmm));
-  prefs.end();
-}
+void smartLoadTuned(float tmm, uint16_t &pre, uint16_t &main){ char kpre[24]; char kmain[24]; snprintf(kpre, sizeof(kpre), "smart_%.2f_pre", tmm); snprintf(kmain, sizeof(kmain), "smart_%.2f_main", tmm); prefs.begin("swp", true); pre  = prefs.getUShort(kpre, base_pre_ms(tmm)); main = prefs.getUShort(kmain, base_main_ms(tmm)); prefs.end(); }
+void smartSaveTuned(float tmm, uint16_t pre, uint16_t main){ char kpre[24]; char kmain[24]; snprintf(kpre, sizeof(kpre), "smart_%.2f_pre", tmm); snprintf(kmain, sizeof(kmain), "smart_%.2f_main", tmm); prefs.begin("swp", false); prefs.putUShort(kpre, pre); prefs.putUShort(kmain, main); prefs.end(); }
 
-// Save tuned durations for a thickness
-void smartSaveTuned(float tmm, uint16_t pre, uint16_t main){
-  char kpre[24]; char kmain[24];
-  snprintf(kpre, sizeof(kpre), "smart_%.2f_pre", tmm);
-  snprintf(kmain, sizeof(kmain), "smart_%.2f_main", tmm);
-  prefs.begin("swp", false);
-  prefs.putUShort(kpre, pre);
-  prefs.putUShort(kmain, main);
-  prefs.end();
-}
+// ================= Detail Logging Structures =================
+struct PhaseAcc { uint32_t n=0; float ir_sum=0, ir_max=0, vr_min=1e9; };
+struct WeldLogEntry {
+  uint32_t ts_ms;          // timestamp when completed
+  char result[16];         // DONE / ABORT_*
+  char mode[8];            // PRESET/SMART
+  char pattern[8];         // SINGLE/DOUBLE
+  uint8_t preset_id;       // 1..99 when PRESET
+  float t_mm;              // thickness when SMART (0 if not)
+  uint16_t pre_ms; uint16_t gap_ms; uint16_t main_ms;
+  // idle before start
+  float vrms_idle; float irms_idle;
+  // phase stats
+  float pre_irms_avg; float pre_irms_max; float pre_vrms_min;
+  float main_irms_avg; float main_irms_max; float main_vrms_min;
+  // guard thresholds used
+  float i_trig; float v_cut; float i_lim;
+  // rating from AI if any
+  char rating[8];
+};
+
+WeldLogEntry wlog[LOG_MAX];
+uint16_t wlogCount=0, wlogHead=0;
+
+void wlogPush(const WeldLogEntry &e){ wlog[wlogHead]=e; wlogHead=(wlogHead+1)%LOG_MAX; if(wlogCount<LOG_MAX) wlogCount++; }
+void wlogClear(){ wlogCount=0; wlogHead=0; }
+
+// live capture during a weld
+float vrms_idle0=0, irms_idle0=0;
+PhaseAcc accPre, accMain;
+uint32_t preStart=0, preEnd=0, mainStart=0, mainEnd=0;
 
 // ================= HTML UI =================
-// Home page
 static const char homeHtml[] PROGMEM = R"rawliteral(
 <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>SpotWelder+ %v%</title>
 <style>:root{--bg:#0b132b;--card:#1b2a49;--fg:#e0e0e0;--btn:#1c2541;--accent:#5bc0be}*{box-sizing:border-box}
 body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:20px;background:var(--bg);color:var(--fg)}
 .btn{font-size:16px;padding:10px 14px;border-radius:10px;border:none;background:var(--btn);color:#fff;cursor:pointer;text-decoration:none;display:inline-block}
-.card{background:var(--card);padding:16px;border-radius:14px;max-width:1040px;margin:0 auto}
+.card{background:var(--card);padding:16px;border-radius:14px;max-width:1100px;margin:0 auto}
 .row{display:flex;gap:12px;flex-wrap:wrap}.col{flex:1 1 320px}.badge{display:inline-block;padding:4px 8px;border-radius:6px;background:#0f3460}
 small{opacity:.7}input,select{padding:8px;border-radius:8px;border:1px solid #2a3b63;background:#0f1b3d;color:#fff}
+table{width:100%;border-collapse:collapse;margin-top:8px}th,td{border-bottom:1px solid #2a3b63;padding:8px;text-align:left}
 </style>
 <script>
-async function load(){ id('ver').textContent='%v%'; await loadMode(); await loadWcfg(); poll(); setInterval(poll, 600); }
-async function poll(){ try{ const s=await (await fetch('/api/sensor')).json(); id('vrms').textContent=s.vrms.toFixed(1)+' V'; id('irms').textContent=s.irms.toFixed(2)+' A'; const g=await (await fetch('/api/guard/status')).json(); id('ready').textContent=g.ready?'READY':'HOLD'; }catch(e){} }
+async function load(){ id('ver').textContent='%v%'; await loadMode(); await loadWcfg(); poll(); setInterval(poll, 800); }
+async function poll(){ try{ const s=await (await fetch('/api/sensor')).json(); id('vrms').textContent=s.vrms.toFixed(1)+' V'; id('irms').textContent=s.irms.toFixed(2)+' A'; const g=await (await fetch('/api/guard/status')).json(); id('ready').textContent=g.ready?'READY':'HOLD'; await loadLog(); }catch(e){} }
 async function loadMode(){ const m=await (await fetch('/api/mode')).json(); id('mode').textContent=m.mode; id('modeSel').value=m.mode; }
 async function setMode(){ const v=id('modeSel').value; await fetch('/api/mode?m='+v,{method:'POST'}); await loadMode(); beep(); }
 async function loadWcfg(){ const r=await (await fetch('/api/weldcfg')).json(); id('pattern').value=r.pattern; id('gap').value=r.gap_ms; id('pat_label').textContent=r.pattern; id('gap_label').textContent=r.gap_ms+' ms'; }
 async function saveWcfg(){ const p=new URLSearchParams({pattern:id('pattern').value,gap_ms:id('gap').value}); await fetch('/api/weldcfg?'+p.toString(),{method:'POST'}); await loadWcfg(); beep(); }
+async function loadLog(){ const L=await (await fetch('/log/summary')).json(); const tb=id('log'); tb.innerHTML=''; for(const e of L){ const tr=document.createElement('tr'); tr.innerHTML=`<td>${e.ts_ms}</td><td>${e.result}</td><td>${e.mode}</td><td>${e.pattern}</td><td>${e.pre_ms}/${e.gap_ms}/${e.main_ms}</td><td>${e.vrms_idle.toFixed(1)}</td><td>${e.main_irms_max.toFixed(2)}</td><td>${e.rating||''}</td>`; tb.appendChild(tr);} }
 function id(s){return document.getElementById(s)}
 function beep(){try{const c=new (window.AudioContext||window.webkitAudioContext)();const o=c.createOscillator();const g=c.createGain();o.type='square';o.frequency.value=720;g.gain.value=0.05;o.connect(g);g.connect(c.destination);o.start();setTimeout(()=>o.stop(),140);}catch(e){}}
 async function trig(){ const r=await fetch('/trigger'); const t=await r.text(); beep(); id('status').textContent=t; }
+async function clr(){ await fetch('/log/clear',{method:'POST'}); await loadLog(); beep(); }
 </script></head>
 <body onload="load()">
 <div class="card">
@@ -226,10 +236,14 @@ async function trig(){ const r=await fetch('/trigger'); const t=await r.text(); 
     </div>
   </div>
 </div>
+
+<div class="card" style="margin-top:16px">
+  <h3>Weld Logs <small><a class="btn" href="/log.csv">Download CSV</a> <button class="btn" onclick="clr()">Clear</button></small></h3>
+  <table><thead><tr><th>ts(ms)</th><th>result</th><th>mode</th><th>pattern</th><th>pre/gap/main</th><th>Vrms_idle</th><th>Irms(main)_max</th><th>rating</th></tr></thead><tbody id="log"></tbody></table>
+</div>
 </body></html>
 )rawliteral";
 
-// Smart page (shows pattern/gap and allows editing too)
 static const char smartHtml[] PROGMEM = R"rawliteral(
 <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Smart AI Spot — %v%</title>
@@ -242,8 +256,8 @@ small{opacity:.7}table{width:100%;border-collapse:collapse;margin-top:8px}th,td{
 input,select{padding:8px;border-radius:8px;border:1px solid #2a3b63;background:#0f1b3d;color:#fff}
 </style>
 <script>
-async function load(){ id('ver').textContent='%v%'; await smartLoad(); await loadWcfg(); poll(); setInterval(poll, 600); }
-async function poll(){ try{ const st=await (await fetch('/smart/status')).json(); id('ai_state').textContent=st.running?'RUNNING':'IDLE'; id('ai_th').textContent=st.t_mm.toFixed(2)+' mm'; id('ai_rating').textContent=st.rating; id('ai_trial').textContent=st.trial; id('ai_pre').textContent=st.tuned_pre+' ms'; id('ai_main').textContent=st.tuned_main+' ms'; id('ai_E').textContent=st.E_est.toFixed(1); id('ai_irms').textContent=st.irms_main_avg.toFixed(2)+' A'; }catch(e){} }
+async function load(){ id('ver').textContent='%v%'; await smartLoad(); await loadWcfg(); poll(); setInterval(poll, 800); }
+async function poll(){ try{ const st=await (await fetch('/smart/status')).json(); id('ai_state').textContent=st.running?'RUNNING':'IDLE'; id('ai_th').textContent=st.t_mm.toFixed(2)+' mm'; id('ai_rating').textContent=st.rating; id('ai_trial').textContent=st.trial; id('ai_pre').textContent=st.tuned_pre+' ms'; id('ai_main').textContent=st.tuned_main+' ms'; id('ai_E').textContent=st.E_est.toFixed(1); id('ai_irms').textContent=st.irms_main_avg.toFixed(2)+' A'; await loadLog(); }catch(e){} }
 async function smartLoad(){ const o=await (await fetch('/smart/options')).json(); const sel=id('th'); sel.innerHTML=''; for(const t of o.thickness){ const opt=document.createElement('option'); opt.value=t; opt.text=t.toFixed(2)+' mm'; sel.appendChild(opt);} const c=await (await fetch('/smart/config')).json(); sel.value=c.t_mm; id('base_pre').textContent=c.base_pre+' ms'; id('base_main').textContent=c.base_main+' ms'; id('tuned_pre').textContent=c.tuned_pre+' ms'; id('tuned_main').textContent=c.tuned_main+' ms'; }
 async function smartSet(){ const t=id('th').value; await fetch('/smart/config',{method:'POST',body:new URLSearchParams({t_mm:t})}); await smartLoad(); beep(); }
 async function smartStart(){ await fetch('/smart/start',{method:'POST'}); beep(); }
@@ -251,6 +265,7 @@ async function smartStop(){ await fetch('/smart/stop',{method:'POST'}); beep(); 
 async function smartApply(){ await fetch('/smart/apply',{method:'POST'}); beep(); }
 async function loadWcfg(){ const r=await (await fetch('/api/weldcfg')).json(); id('pattern').value=r.pattern; id('gap').value=r.gap_ms; id('pat_label').textContent=r.pattern; id('gap_label').textContent=r.gap_ms+' ms'; }
 async function saveWcfg(){ const p=new URLSearchParams({pattern:id('pattern').value,gap_ms:id('gap').value}); await fetch('/api/weldcfg?'+p.toString(),{method:'POST'}); await loadWcfg(); beep(); }
+async function loadLog(){ const L=await (await fetch('/log/summary')).json(); const tb=id('log'); tb.innerHTML=''; for(const e of L){ const tr=document.createElement('tr'); tr.innerHTML=`<td>${e.ts_ms}</td><td>${e.result}</td><td>${e.mode}</td><td>${e.pattern}</td><td>${e.pre_ms}/${e.gap_ms}/${e.main_ms}</td><td>${e.vrms_idle.toFixed(1)}</td><td>${e.main_irms_max.toFixed(2)}</td><td>${e.rating||''}</td>`; tb.appendChild(tr);} }
 function id(s){return document.getElementById(s)}
 function beep(){try{const c=new (window.AudioContext||window.webkitAudioContext)();const o=c.createOscillator();const g=c.createGain();o.type='square';o.frequency.value=720;g.gain.value=0.05;o.connect(g);g.connect(c.destination);o.start();setTimeout(()=>o.stop(),140);}catch(e){}}
 </script>
@@ -258,7 +273,7 @@ function beep(){try{const c=new (window.AudioContext||window.webkitAudioContext)
 <body onload="load()">
 <div class="card">
   <h2>Smart AI Spot <span class="badge" id="ver"></span></h2>
-  <p><a class="btn" href="/">◀ Back to Home</a> <a class="btn" href="/smart/history.csv">Download History CSV</a></p>
+  <p><a class="btn" href="/">◀ Back to Home</a> <a class="btn" href="/smart/history.csv">Download History CSV</a> <a class="btn" href="/log.csv">Download Weld Logs CSV</a></p>
   <div class="row">
     <div class="col">
       <p><b>Material</b>: Nickel</p>
@@ -276,20 +291,20 @@ function beep(){try{const c=new (window.AudioContext||window.webkitAudioContext)
       <div>pre=<b id="ai_pre">-</b>, main=<b id="ai_main">-</b></div>
       <div>E_est=<b id="ai_E">-</b>, Irms(main)=<b id="ai_irms">-</b></div>
       <div>t=<b id="ai_th">-</b></div>
+      <small>Pattern: <b id="pat_label">-</b>, gap=<b id="gap_label">-</b></small>
     </div>
     <div class="col">
-      <p><b>Spot Pattern</b> (Smart mode juga memakai pattern & gap ini)</p>
+      <p><b>Spot Pattern</b> (Smart mode memakai pattern & gap ini)</p>
       <div>Pattern: <select id="pattern"><option value="SINGLE">SINGLE</option><option value="DOUBLE">DOUBLE</option></select></div>
       <div style="margin-top:6px">Gap (ms): <input id="gap" style="width:120px" type="number" min="10" max="200" step="5"></div>
       <p style="margin-top:8px"><button class="btn" onclick="saveWcfg()">Save Pattern</button></p>
-      <small>Now: <b id="pat_label">-</b>, gap=<b id="gap_label">-</b></small>
     </div>
   </div>
   <hr>
-  <h3>History (latest first)</h3>
+  <h3>Weld Logs (latest first)</h3>
   <table>
-    <thead><tr><th>ms</th><th>t(mm)</th><th>pre</th><th>main</th><th>E_est</th><th>Irms</th><th>rating</th></tr></thead>
-    <tbody id="hist"></tbody>
+    <thead><tr><th>ts(ms)</th><th>result</th><th>mode</th><th>pattern</th><th>pre/gap/main</th><th>Vrms_idle</th><th>Irms(main)_max</th><th>rating</th></tr></thead>
+    <tbody id="log"></tbody>
   </table>
 </div>
 </body></html>
@@ -355,19 +370,22 @@ void sensorLoop(){
   }
   uint32_t now = millis();
   if(now - winStart >= SENSE_WIN_MS){
-    float i_counts = (accI.n>0)? sqrt((double)accI.sumSq/(double)accI.n) : 0.0;
-    float v_counts = (accV.n>0)? sqrt((double)accV.sumSq/(double)accV.n) : 0.0;
-    Irms = i_counts * I_scale; Vrms = v_counts * V_scale;
+    float i_counts = (accI.n>0)? sqrt((double)accI.sumSq / (double)accI.n) : 0.0;
+    float v_counts = (accV.n>0)? sqrt((double)accV.sumSq / (double)accV.n) : 0.0;
+    Irms = i_counts * I_scale;
+    Vrms = v_counts * V_scale;
+
     bool above = (Irms >= I_trig_A) && (Vrms >= V_cut_V);
     if(above) stableCnt++; else stableCnt = 0;
-    accI = {0,0,0}; accV = {0,0,0}; winStart = now;
+
+    accI = {0,0,0}; accV = {0,0,0};
+    winStart = now;
   }
 }
 
 bool canTrigger(){ if(!auto_en) return false; if(g_state != IDLE) return false; if(guard_en && Vrms < V_cut_V) return false; if(millis() - lastWeldEnd < cooldownMs) return false; if(stableCnt < stableWinReq) return false; return true; }
 void abortWeld(const char* reason){ digitalWrite(SSR_PIN, LOW); g_state = IDLE; addLog(String("ABORT: ")+reason); }
 
-// Smart helpers
 void aiComputeFromT(){ ai.base_pre = base_pre_ms(ai.t_mm); ai.base_main = base_main_ms(ai.t_mm); smartLoadTuned(ai.t_mm, ai.tuned_pre, ai.tuned_main); }
 void aiStart(){ ai.running = true; ai.trial = 0; ai.rating = "-"; ai.E_est = 0; ai.irms_main_avg = 0; ai.dv_sag = 0; aiComputeFromT(); }
 void aiStop(){ ai.running = false; }
@@ -383,18 +401,14 @@ void aiPostCycle(){
   else { ai.rating = "GOOD"; float center=0.5f*(ai.E_low+ai.E_high); if(ai.E_est<center) ai.tuned_main=(uint16_t) fminf(AI_MAX_MAIN_MS,(float)ai.tuned_main*(1.0f+AI_FINE_PCT)); else ai.tuned_main=(uint16_t) fmaxf(AI_MIN_MAIN_MS,(float)ai.tuned_main*(1.0f-AI_FINE_PCT)); }
   if(ai.tuned_pre<AI_MIN_PRE_MS) ai.tuned_pre=AI_MIN_PRE_MS; if(ai.tuned_pre>AI_MAX_PRE_MS) ai.tuned_pre=AI_MAX_PRE_MS;
   if(ai.tuned_main<AI_MIN_MAIN_MS) ai.tuned_main=AI_MIN_MAIN_MS; if(ai.tuned_main>AI_MAX_MAIN_MS) ai.tuned_main=AI_MAX_MAIN_MS;
-  // push history
-  AiHistEntry e; e.ms=millis(); e.t_mm=ai.t_mm; e.pre_ms=ai.tuned_pre; e.main_ms=ai.tuned_main; e.E_est=ai.E_est; e.irms=ai.irms_main_avg; strncpy(e.rating, ai.rating.c_str(), sizeof(e.rating)); e.rating[sizeof(e.rating)-1]='\0';
-  histPush(e);
+  AiHistEntry e; e.ms=millis(); e.t_mm=ai.t_mm; e.pre_ms=ai.tuned_pre; e.main_ms=ai.tuned_main; e.E_est=ai.E_est; e.irms=ai.irms_main_avg; strncpy(e.rating, ai.rating.c_str(), sizeof(e.rating)); e.rating[sizeof(e.rating)-1]='\0'; histPush(e);
 }
 
 // Apply op mode + pattern
 void applyModeDurations(){
-  // Base durations from selected mode
   uint16_t pre=0, main=0;
   if(opMode==MODE_SMART){ smartLoadTuned(ai.t_mm, pre, main); }
   else { Preset p; makePreset(g_selectedPreset,p); pre=p.preMs; main=p.mainMs; }
-  // Apply pattern
   if(spotPattern==PATTERN_SINGLE){ pre = 0; }
   g_preMs = pre; g_mainMs = main; g_gapMs = gapMs; // gap used only if pre>0
 }
@@ -427,35 +441,89 @@ void smartStop(){ aiStop(); server.send(200,"text/plain","OK"); }
 void smartApply(){ smartSaveTuned(ai.t_mm, ai.tuned_pre, ai.tuned_main); if(opMode==MODE_SMART){ applyModeDurations(); } server.send(200,"text/plain","OK"); }
 void smartStatus(){ String out="{"; out+="\"running\":"+String(ai.running?1:0)+","; out+="\"t_mm\":"+String(ai.t_mm,2)+","; out+="\"trial\":"+String(ai.trial)+","; out+="\"rating\":\""+ai.rating+"\","; out+="\"tuned_pre\":"+String(ai.tuned_pre)+","; out+="\"tuned_main\":"+String(ai.tuned_main)+","; out+="\"E_est\":"+String(ai.E_est,1)+","; out+="\"irms_main_avg\":"+String(ai.irms_main_avg,2); out+="}"; server.send(200,"application/json",out); }
 
-// History JSON (latest first)
-void smartHistoryJson(){ String out="["; int n=histCount; for(int i=0;i<n;i++){ int idx=(histHead - 1 - i + AI_HIST_MAX)%AI_HIST_MAX; const AiHistEntry &e=hist[idx]; if(i) out+=","; out+="{"; out+="\"ms\":"+String(e.ms)+","; out+="\"t_mm\":"+String(e.t_mm,2)+","; out+="\"pre_ms\":"+String(e.pre_ms)+","; out+="\"main_ms\":"+String(e.main_ms)+","; out+="\"E_est\":"+String(e.E_est,1)+","; out+="\"irms\":"+String(e.irms,2)+","; out+="\"rating\":\""+String(e.rating)+"\""; out+="}"; } out+="]"; server.send(200,"application/json",out); }
-
-// History CSV
-void smartHistoryCsv(){ String out="ms,t_mm,pre_ms,main_ms,E_est,irms,rating\n"; int n=histCount; for(int i=0;i<n;i++){ int idx=(histHead - 1 - i + AI_HIST_MAX)%AI_HIST_MAX; const AiHistEntry &e=hist[idx]; out+=String(e.ms)+","+String(e.t_mm,2)+","+String(e.pre_ms)+","+String(e.main_ms)+","+String(e.E_est,1)+","+String(e.irms,2)+","+String(e.rating)+"\n"; } server.send(200,"text/csv",out); }
-
-// ================= Trigger & FSM =================
-void startWeld(){ if(g_state!=IDLE) return; g_state=(g_preMs>0? PRE_PULSE: MAIN_PULSE); g_t0=millis(); digitalWrite(SSR_PIN,(g_state!=IDLE)); addLog("WELD START"); }
-
-void fsmLoop(){ unsigned long t=millis(); if(guard_en && g_state!=IDLE){ if(Irms>I_lim_A){ abortWeld("OverCurrent"); lastWeldEnd=millis(); return; } if(Vrms<V_cut_V){ abortWeld("UnderVoltage"); lastWeldEnd=millis(); return; } }
-  switch(g_state){
-    case IDLE: applyModeDurations(); if(canTrigger()){ stableCnt=0; startWeld(); } break;
-    case PRE_PULSE: if(t-g_t0>=g_preMs){ digitalWrite(SSR_PIN,LOW); g_state=GAP; g_t0=t; } break;
-    case GAP: if(t-g_t0>=g_gapMs){ g_state=MAIN_PULSE; g_t0=t; digitalWrite(SSR_PIN,HIGH); } break;
-    case MAIN_PULSE: if(t-g_t0>=g_mainMs){ digitalWrite(SSR_PIN,LOW); g_state=IDLE; lastWeldEnd=millis(); addLog("WELD END"); if(ai.running){ ai.trial++; aiPostCycle(); if(ai.rating=="GOOD" || ai.trial>=AI_MAX_TRIALS){ smartSaveTuned(ai.t_mm, ai.tuned_pre, ai.tuned_main); ai.running=false; } } } break;
-  }
+// ---- Detail Logs API ----
+void logJson(){
+  String out="[";
+  int n=wlogCount; for(int i=0;i<n;i++){ int idx=(wlogHead - 1 - i + LOG_MAX)%LOG_MAX; const WeldLogEntry &e=wlog[idx]; if(i) out+=","; out+="{";
+    out+="\"ts_ms\":"+String(e.ts_ms)+",";
+    out+="\"result\":\""+String(e.result)+"\",";
+    out+="\"mode\":\""+String(e.mode)+"\",";
+    out+="\"pattern\":\""+String(e.pattern)+"\",";
+    out+="\"preset_id\":"+String(e.preset_id)+",";
+    out+="\"t_mm\":"+String(e.t_mm,2)+",";
+    out+="\"pre_ms\":"+String(e.pre_ms)+",";
+    out+="\"gap_ms\":"+String(e.gap_ms)+",";
+    out+="\"main_ms\":"+String(e.main_ms)+",";
+    out+="\"vrms_idle\":"+String(e.vrms_idle,2)+",";
+    out+="\"irms_idle\":"+String(e.irms_idle,2)+",";
+    out+="\"pre_irms_avg\":"+String(e.pre_irms_avg,2)+",";
+    out+="\"pre_irms_max\":"+String(e.pre_irms_max,2)+",";
+    out+="\"pre_vrms_min\":"+String(e.pre_vrms_min,1)+",";
+    out+="\"main_irms_avg\":"+String(e.main_irms_avg,2)+",";
+    out+="\"main_irms_max\":"+String(e.main_irms_max,2)+",";
+    out+="\"main_vrms_min\":"+String(e.main_vrms_min,1)+",";
+    out+="\"i_trig\":"+String(e.i_trig,2)+",";
+    out+="\"v_cut\":"+String(e.v_cut,1)+",";
+    out+="\"i_lim\":"+String(e.i_lim,1)+",";
+    out+="\"rating\":\""+String(e.rating)+"\"";
+  out+="}"; }
+  out+="]"; server.send(200,"application/json",out);
 }
 
-void handleTrigger(){ startWeld(); server.send(200,"text/plain","Weld cycle started"); }
+void logCsv(){
+  String out="ts_ms,result,mode,pattern,preset_id,t_mm,pre_ms,gap_ms,main_ms,vrms_idle,irms_idle,pre_irms_avg,pre_irms_max,pre_vrms_min,main_irms_avg,main_irms_max,main_vrms_min,i_trig,v_cut,i_lim,rating\n";
+  int n=wlogCount; for(int i=0;i<n;i++){ int idx=(wlogHead - 1 - i + LOG_MAX)%LOG_MAX; const WeldLogEntry &e=wlog[idx];
+    out+=String(e.ts_ms)+","+String(e.result)+","+String(e.mode)+","+String(e.pattern)+","+String(e.preset_id)+","+String(e.t_mm,2)+","+String(e.pre_ms)+","+String(e.gap_ms)+","+String(e.main_ms)+","+String(e.vrms_idle,2)+","+String(e.irms_idle,2)+","+String(e.pre_irms_avg,2)+","+String(e.pre_irms_max,2)+","+String(e.pre_vrms_min,1)+","+String(e.main_irms_avg,2)+","+String(e.main_irms_max,2)+","+String(e.main_vrms_min,1)+","+String(e.i_trig,2)+","+String(e.v_cut,1)+","+String(e.i_lim,1)+","+String(e.rating)+"\n";
+  }
+  server.send(200,"text/csv",out);
+}
+
+void logClear(){ wlogClear(); server.send(200,"text/plain","OK"); }
+
+// ================= Trigger & FSM =================
+void startWeld(){ if(g_state!=IDLE) return; g_state=(g_preMs>0? PRE_PULSE: MAIN_PULSE); g_t0=millis(); digitalWrite(SSR_PIN,(g_state!=IDLE)); addLog("WELD START");
+  // capture idle baseline
+  vrms_idle0 = Vrms; irms_idle0 = Irms;
+  // reset accumulators
+  accPre = PhaseAcc(); accMain = PhaseAcc();
+  preStart=preEnd=mainStart=mainEnd=0;
+}
+
+void fsmLoop(){ unsigned long t=millis();
+  // per-state sampling for logging
+  if(g_state==PRE_PULSE){ accPre.n++; accPre.ir_sum+=Irms; if(Irms>accPre.ir_max) accPre.ir_max=Irms; if(Vrms<accPre.vr_min) accPre.vr_min=Vrms; if(!preStart) preStart=t; }
+  else if(g_state==MAIN_PULSE){ accMain.n++; accMain.ir_sum+=Irms; if(Irms>accMain.ir_max) accMain.ir_max=Irms; if(Vrms<accMain.vr_min) accMain.vr_min=Vrms; if(!mainStart) mainStart=t; }
+
+  if(guard_en && g_state != IDLE){ if(Irms > I_lim_A){ abortWeld("OverCurrent"); lastWeldEnd = millis();
+      // push log on abort
+      WeldLogEntry e={0}; e.ts_ms=lastWeldEnd; strcpy(e.result,"ABORT_OC"); strcpy(e.mode,(opMode==MODE_SMART)?"SMART":"PRESET"); strcpy(e.pattern,(spotPattern==PATTERN_DOUBLE)?"DOUBLE":"SINGLE"); e.preset_id=g_selectedPreset; e.t_mm=(opMode==MODE_SMART? ai.t_mm:0.0f); e.pre_ms=g_preMs; e.gap_ms=g_gapMs; e.main_ms=g_mainMs; e.vrms_idle=vrms_idle0; e.irms_idle=irms_idle0; e.pre_irms_avg=(accPre.n? accPre.ir_sum/accPre.n:0); e.pre_irms_max=accPre.ir_max; e.pre_vrms_min=(accPre.n? accPre.vr_min:Vrms); e.main_irms_avg=(accMain.n? accMain.ir_sum/accMain.n:0); e.main_irms_max=accMain.ir_max; e.main_vrms_min=(accMain.n? accMain.vr_min:Vrms); e.i_trig=I_trig_A; e.v_cut=V_cut_V; e.i_lim=I_lim_A; strncpy(e.rating, ai.rating.c_str(), sizeof(e.rating)); e.rating[sizeof(e.rating)-1]='\0'; wlogPush(e);
+      return; }
+    if(Vrms < V_cut_V){ abortWeld("UnderVoltage"); lastWeldEnd = millis(); WeldLogEntry e={0}; e.ts_ms=lastWeldEnd; strcpy(e.result,"ABORT_UV"); strcpy(e.mode,(opMode==MODE_SMART)?"SMART":"PRESET"); strcpy(e.pattern,(spotPattern==PATTERN_DOUBLE)?"DOUBLE":"SINGLE"); e.preset_id=g_selectedPreset; e.t_mm=(opMode==MODE_SMART? ai.t_mm:0.0f); e.pre_ms=g_preMs; e.gap_ms=g_gapMs; e.main_ms=g_mainMs; e.vrms_idle=vrms_idle0; e.irms_idle=irms_idle0; e.pre_irms_avg=(accPre.n? accPre.ir_sum/accPre.n:0); e.pre_irms_max=accPre.ir_max; e.pre_vrms_min=(accPre.n? accPre.vr_min:Vrms); e.main_irms_avg=(accMain.n? accMain.ir_sum/accMain.n:0); e.main_irms_max=accMain.ir_max; e.main_vrms_min=(accMain.n? accMain.vr_min:Vrms); e.i_trig=I_trig_A; e.v_cut=V_cut_V; e.i_lim=I_lim_A; strncpy(e.rating, ai.rating.c_str(), sizeof(e.rating)); e.rating[sizeof(e.rating)-1]='\0'; wlogPush(e); return; } }
+
+  switch(g_state){
+    case IDLE: applyModeDurations(); if(canTrigger()){ stableCnt = 0; startWeld(); } break;
+    case PRE_PULSE: if(t - g_t0 >= g_preMs){ digitalWrite(SSR_PIN, LOW); g_state = GAP; g_t0 = t; preEnd=t; } break;
+    case GAP: if(t - g_t0 >= g_gapMs){ g_state = MAIN_PULSE; g_t0 = t; digitalWrite(SSR_PIN, HIGH); } break;
+    case MAIN_PULSE: if(t - g_t0 >= g_mainMs){ digitalWrite(SSR_PIN, LOW); g_state = IDLE; lastWeldEnd = millis(); addLog("WELD END"); mainEnd=t; 
+      // AI post & save
+      if(ai.running){ ai.trial++; aiPostCycle(); if(ai.rating=="GOOD" || ai.trial>=AI_MAX_TRIALS){ smartSaveTuned(ai.t_mm, ai.tuned_pre, ai.tuned_main); ai.running=false; } }
+      // push completed log
+      WeldLogEntry e={0}; e.ts_ms=lastWeldEnd; strcpy(e.result,"DONE"); strcpy(e.mode,(opMode==MODE_SMART)?"SMART":"PRESET"); strcpy(e.pattern,(spotPattern==PATTERN_DOUBLE)?"DOUBLE":"SINGLE"); e.preset_id=g_selectedPreset; e.t_mm=(opMode==MODE_SMART? ai.t_mm:0.0f); e.pre_ms=g_preMs; e.gap_ms=g_gapMs; e.main_ms=g_mainMs; e.vrms_idle=vrms_idle0; e.irms_idle=irms_idle0; e.pre_irms_avg=(accPre.n? accPre.ir_sum/accPre.n:0); e.pre_irms_max=accPre.ir_max; e.pre_vrms_min=(accPre.n? accPre.vr_min:Vrms); e.main_irms_avg=(accMain.n? accMain.ir_sum/accMain.n:0); e.main_irms_max=accMain.ir_max; e.main_vrms_min=(accMain.n? accMain.vr_min:Vrms); e.i_trig=I_trig_A; e.v_cut=V_cut_V; e.i_lim=I_lim_A; strncpy(e.rating, ai.rating.c_str(), sizeof(e.rating)); e.rating[sizeof(e.rating)-1]='\0'; wlogPush(e);
+    } break; }
+}
+
+void handleTrigger(){ startWeld(); server.send(200, "text/plain", "Weld cycle started"); }
 
 // ================= Setup / Loop =================
-void setup(){ Serial.begin(115200); pinMode(SSR_PIN,OUTPUT); digitalWrite(SSR_PIN,LOW); loadAll(); sensorInit(); aiComputeFromT();
-  WiFi.mode(WIFI_AP); bool ok=WiFi.softAP(AP_SSID,AP_PASS,1,0,4); Serial.println(ok?"AP started: SpotWelder+":"AP start failed!"); Serial.print("AP IP: "); Serial.println(WiFi.softAPIP()); Serial.printf("Build: %s\n", BUILD_VERSION);
-  server.on("/", [](){ server.send(200,"text/html", applyVersion(homeHtml)); });
-  server.on("/ui", [](){ server.send(200,"text/html", applyVersion(homeHtml)); });
-  server.on("/smart", [](){ server.send(200,"text/html", applyVersion(smartHtml)); });
-  server.on("/smart/", [](){ server.sendHeader("Location","/smart"); server.send(302,"text/plain",""); });
+void setup(){ Serial.begin(115200); pinMode(SSR_PIN, OUTPUT); digitalWrite(SSR_PIN, LOW); loadAll(); sensorInit(); aiComputeFromT();
+  WiFi.mode(WIFI_AP); bool ok=WiFi.softAP(AP_SSID, AP_PASS, 1, 0, 4); Serial.println(ok?"AP started: SpotWelder+":"AP start failed!"); Serial.print("AP IP: "); Serial.println(WiFi.softAPIP()); Serial.printf("Build: %s\n", BUILD_VERSION);
+  server.on("/", [](){ server.send(200, "text/html", applyVersion(homeHtml)); });
+  server.on("/ui", [](){ server.send(200, "text/html", applyVersion(homeHtml)); });
+  server.on("/smart", [](){ server.send(200, "text/html", applyVersion(smartHtml)); });
+  server.on("/smart/", [](){ server.sendHeader("Location","/smart"); server.send(302, "text/plain", ""); });
+
   server.on("/trigger", handleTrigger);
-  server.on("/version", [](){ server.send(200,"text/plain", BUILD_VERSION); });
+  server.on("/version", [](){ server.send(200, "text/plain", BUILD_VERSION); });
   // Preset/API
   server.on("/api/presets", HTTP_GET, respondJsonPresets);
   server.on("/api/current", HTTP_GET, handleCurrent);
@@ -482,15 +550,19 @@ void setup(){ Serial.begin(115200); pinMode(SSR_PIN,OUTPUT); digitalWrite(SSR_PI
   server.on("/smart/status", HTTP_GET, smartStatus);
   server.on("/smart/history", HTTP_GET, smartHistoryJson);
   server.on("/smart/history.csv", HTTP_GET, smartHistoryCsv);
+  // Detail Logs
+  server.on("/log/summary", HTTP_GET, logJson);
+  server.on("/log.csv", HTTP_GET, logCsv);
+  server.on("/log/clear", HTTP_POST, logClear);
   // OTA
-  server.on("/update", HTTP_GET, [](){ if(!server.authenticate(OTA_USER, OTA_PASS)) return server.requestAuthentication(); server.send(200,"text/html", updateHtml); });
-  server.on("/update", HTTP_POST, [](){ if(!server.authenticate(OTA_USER, OTA_PASS)) return server.requestAuthentication(); bool ok=!Update.hasError(); server.sendHeader("Connection","close"); server.send(200,"text/plain", ok?"OK":"FAIL"); delay(200); ESP.restart(); },
+  server.on("/update", HTTP_GET, [](){ if(!server.authenticate(OTA_USER, OTA_PASS)) return server.requestAuthentication(); server.send(200, "text/html", updateHtml); });
+  server.on("/update", HTTP_POST, [](){ if(!server.authenticate(OTA_USER, OTA_PASS)) return server.requestAuthentication(); bool ok=!Update.hasError(); server.sendHeader("Connection","close"); server.send(200, "text/plain", ok?"OK":"FAIL"); delay(200); ESP.restart(); },
     [](){ if(!server.authenticate(OTA_USER, OTA_PASS)) return; HTTPUpload& u=server.upload(); if(u.status==UPLOAD_FILE_START){ if(!Update.begin(UPDATE_SIZE_UNKNOWN)){ Update.printError(Serial);} } else if(u.status==UPLOAD_FILE_WRITE){ if(Update.write(u.buf,u.currentSize)!=u.currentSize){ Update.printError(Serial);} } else if(u.status==UPLOAD_FILE_END){ if(Update.end(true)){ Serial.printf("[OTA] %u bytes\n", u.totalSize);} else { Update.printError(Serial);} } else if(u.status==UPLOAD_FILE_ABORTED){ Update.end(); Serial.println("[OTA] aborted"); } });
   // Aliases & 404
-  server.on("/update/", HTTP_GET, [](){ server.sendHeader("Location","/update"); server.send(302,"text/plain",""); });
-  server.on("/admin", HTTP_GET, [](){ server.sendHeader("Location","/update"); server.send(302,"text/plain",""); });
-  server.on("/ota", HTTP_GET, [](){ server.sendHeader("Location","/update"); server.send(302,"text/plain",""); });
-  server.onNotFound([](){ server.send(200,"text/html", applyVersion(homeHtml)); });
+  server.on("/update/", HTTP_GET, [](){ server.sendHeader("Location","/update"); server.send(302, "text/plain", ""); });
+  server.on("/admin", HTTP_GET, [](){ server.sendHeader("Location","/update"); server.send(302, "text/plain", ""); });
+  server.on("/ota", HTTP_GET, [](){ server.sendHeader("Location","/update"); server.send(302, "text/plain", ""); });
+  server.onNotFound([](){ server.send(200, "text/html", applyVersion(homeHtml)); });
   server.begin(); }
 
 void loop(){ server.handleClient(); sensorLoop(); fsmLoop(); }
