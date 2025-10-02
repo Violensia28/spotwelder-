@@ -1,22 +1,35 @@
 #ifndef CONFIG_H
 #define CONFIG_H
+
+// ==== Pins ====
 #define SSR_PIN 26
 #define ACS712_PIN 34
 #define ZMPT_PIN 35
-#define BUZZER_PIN 27
+#define BUZZER_PIN 27 // Dummy (Web Audio beep used)
+
+// ==== Presets ====
 #define PRESET_COUNT 99
+
 #ifndef BUILD_VERSION
-#define BUILD_VERSION "Build_6_2_1_ModeHistoryFix"
+#define BUILD_VERSION "Build_6_2_2_SpotPattern"
 #endif
+
+// ==== Wi-Fi / OTA ====
 #define AP_SSID "SpotWelder_AP"
 #define AP_PASS "12345678"
 #define OTA_USER "admin"
 #define OTA_PASS "admin"
+
+// ==== Sensor Defaults (tune by calibration) ====
 #define DEF_I_OFFSET 2048
 #define DEF_V_OFFSET 2048
-#define DEF_I_SCALE  0.00050f
-#define DEF_V_SCALE  0.10000f
+#define DEF_I_SCALE  0.00050f   // A per ADC count (placeholder)
+#define DEF_V_SCALE  0.10000f   // V per ADC count (placeholder)
+
+// ==== Sensor window (ms) ====
 #define SENSE_WIN_MS 250
+
+// ==== Auto-Trigger & Guards (defaults) ====
 #define DEF_AUTO_EN      1
 #define DEF_GUARD_EN     1
 #define DEF_I_TRIG_A     2.0f
@@ -24,19 +37,31 @@
 #define DEF_I_LIMIT_A    35.0f
 #define DEF_COOLDOWN_MS  1500
 #define DEF_STABLE_WIN   2
+
+// ==== Smart AI (bounds & steps) ====
 #define AI_MAX_TRIALS    4
-#define AI_UP_MAIN_PCT   0.15f
-#define AI_UP_PRE_PCT    0.08f
-#define AI_DOWN_MAIN_PCT 0.15f
-#define AI_FINE_PCT      0.05f
+#define AI_UP_MAIN_PCT   0.15f   // increase main when cold (15%)
+#define AI_UP_PRE_PCT    0.08f   // increase pre when cold (8%)
+#define AI_DOWN_MAIN_PCT 0.15f   // decrease main when hot (15%)
+#define AI_FINE_PCT      0.05f   // fine tune when OK (5%)
 #define AI_MIN_PRE_MS    10
 #define AI_MAX_PRE_MS    80
 #define AI_MIN_MAIN_MS   60
 #define AI_MAX_MAIN_MS   300
-#define AI_BAND_LOW      0.90f
-#define AI_BAND_HIGH     1.10f
+#define AI_BAND_LOW      0.90f   // 90% of base energy
+#define AI_BAND_HIGH     1.10f   // 110% of base energy
+
+// ==== Mode & History ====
 #define MODE_PRESET 0
 #define MODE_SMART  1
-#define DEF_OP_MODE MODE_PRESET
+#define DEF_OP_MODE MODE_PRESET   // default startup mode
+
 #define AI_HIST_MAX 32
+
+// ==== Spot Pattern ====
+#define PATTERN_SINGLE 0
+#define PATTERN_DOUBLE 1
+#define DEF_SPOT_PATTERN PATTERN_DOUBLE
+#define DEF_GAP_MS 60
+
 #endif
