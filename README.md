@@ -1,19 +1,33 @@
-# spotwelding+ (Build 6.1 — Smart Page terpisah `/smart`)
+# spotwelding+ (Build 6.2 — Mode Switch & History)
 
-Pemisahan UI Smart AI Spot ke halaman khusus `/smart` agar **tidak bentrok** dengan UI Preset 99.
+Build 6.2 menambahkan **Operation Mode** (Preset ↔ Smart) tersimpan di **NVS** dan **History Auto‑Tune** (JSON + **CSV download**).
 
-## Yang baru
-- Halaman **Home** (`/`): Trigger, Live Sensor, link ke **/smart**, OTA, Guard status ringkas.
-- Halaman **Smart** (`/smart`): Smart AI Spot lengkap (thickness Ni, baseline & tuned, Start/Stop/Apply, status RUNNING/IDLE, rating, metrik terakhir).
-- Alias: `/smart/` → redirect ke `/smart` (anti salah ketik).
-- **API tetap sama** (`/smart/*`, `/api/*`).
-- **BUILD_VERSION**: `Build_6_1_SmartPage` (escape quotes di `platformio.ini` sudah benar).
+## Fitur Baru
+- **Mode Switch** (`/api/mode` + selector di Home):
+  - `PRESET` → gunakan **Preset 1..99** seperti biasa.
+  - `SMART` → gunakan **tuned pre/main** dari Smart AI (per ketebalan Ni).
+- **History Auto‑Tune**:
+  - Endpoint: `GET /smart/history` (JSON) & `GET /smart/history.csv` (CSV)
+  - Kolom: `ms, t_mm, pre_ms, main_ms, E_est, irms, rating`
+  - Ring buffer 32 entri (latest first).
+- **Halaman**: `/` (Home) dengan **Mode selector** & link ke `/smart`; `/smart` berisi Smart AI penuh + tabel History.
+
+## Endpoint Baru
+```http
+GET  /api/mode                     # → {"mode":"PRESET"|"SMART"}
+POST /api/mode?m=PRESET|SMART      # set & simpan ke NVS
+GET  /smart/history                # JSON ringkas (latest first)
+GET  /smart/history.csv            # CSV download
+```
+
+## Catatan Integrasi
+- **Guard** & **Auto‑Trigger** tetap aktif di kedua mode.
+- **Apply Tuned** tidak otomatis mengubah mode; memakai hasil tuned **langsung** hanya jika mode = SMART.
+- **Tebal Ni aktif** disimpan di NVS (`smart_t`).
 
 ## Build & Update
-- CI: *Actions → CI Build* → artifacts (`spotweldingplus-app.bin`, `spotweldingplus-merged.bin`, `.elf`).
-- Flash awal: `merged.bin @ 0x0` (Android Flasher).
-- Update berikutnya: **OTA** upload `app.bin` ke `/update`.
+- Flash awal: `spotweldingplus-merged.bin @ 0x0` (Android Flasher)
+- Update berikutnya: **OTA** → unggah `spotweldingplus-app.bin` ke `/update`
 
-## Catatan
-- Guard & Auto‑Trigger tetap aktif di kedua halaman.
-- Smart AI hanya mengubah durasi saat **RUNNING** atau setelah **Apply** (menyimpan tuned di NVS per ketebalan).
+## Versi
+- `/version` → `Build_6_2_ModeHistory`
