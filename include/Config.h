@@ -11,7 +11,7 @@
 #define PRESET_COUNT 99
 
 #ifndef BUILD_VERSION
-#define BUILD_VERSION "Build_6_2_2_SpotPattern"
+#define BUILD_VERSION "Build_7_DetailLogging"
 #endif
 
 // ==== Wi-Fi / OTA ====
@@ -63,5 +63,8 @@
 #define PATTERN_DOUBLE 1
 #define DEF_SPOT_PATTERN PATTERN_DOUBLE
 #define DEF_GAP_MS 60
+
+// ==== Detail Logging ====
+#define LOG_MAX 256   // ring buffer entries
 
 #endif
