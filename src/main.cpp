@@ -1,4 +1,3 @@
-
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
@@ -18,6 +17,7 @@ float V_scale  = 0.10000f, I_scale = 0.00050f;
 static const char* AP_SSID = "SpotWelder_AP";
 static const char* AP_PASS = "12345678";
 
+// Forward declaration untuk inisialisasi route 6.2.3
 extern "C" void initRoutes623();
 
 void setup(){
@@ -30,11 +30,11 @@ void setup(){
   Serial.print(F("AP IP: ")); Serial.println(WiFi.softAPIP());
   Serial.print(F("Build: ")); Serial.println(F(BUILD_VERSION));
 
-  // Basic
-  server.on("/", HTTP_GET, [](){ server.send(200, "text/plain", "OK"); });
-  server.on("/version", HTTP_GET, [](){ server.send(200, "text/plain", BUILD_VERSION); });
+  // route dasar
+  server.on("/", HTTP_GET, { server.send(200, "text/plain", "OK"); });
+  server.on("/version", HTTP_GET, { server.send(200, "text/plain", BUILD_VERSION); });
 
-  // 6.2.3 routes
+  // registrasi route 6.2.3 sebelum server.begin()
   initRoutes623();
 
   server.begin();
