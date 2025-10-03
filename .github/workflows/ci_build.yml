@@ -1,0 +1,41 @@
+
+name: CI Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Install PlatformIO & esptool
+        run: |
+          pip install --upgrade platformio esptool
+      - name: Build firmware
+        run: |
+          pio run -e esp32dev
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          set -e
+          BUILD=.pio/build/esp32dev
+          mkdir -p dist
+          cp "$BUILD/firmware.bin" dist/spotweldingplus-app.bin
+          BOOT=$(ls "$BUILD"/bootloader*.bin | head -n1 || true)
+          PART=$(ls "$BUILD"/partitions*.bin | head -n1 || true)
+          if [ -n "$BOOT" ] && [ -n "$PART" ] ; then
+            cp "$BOOT" dist/bootloader.bin
+            cp "$PART" dist/partitions.bin
+            esptool.py --chip esp32 merge_bin -o dist/spotweldingplus-merged.bin               --flash_mode dio --flash_freq 40m --flash_size 4MB               0x1000 dist/bootloader.bin 0x8000 dist/partitions.bin 0x10000 dist/spotweldingplus-app.bin
+          fi
+          cp "$BUILD/firmware.elf" dist/spotweldingplus.elf || true
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: spotweldingplus-build-${{ github.run_number }}
+          path: dist/*
+          if-no-files-found: error
