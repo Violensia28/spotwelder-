@@ -482,7 +482,10 @@ void setup(){ Serial.begin(115200); pinMode(SSR_PIN,OUTPUT); digitalWrite(SSR_PI
   server.on("/smart/status", HTTP_GET, smartStatus);
   server.on("/smart/history", HTTP_GET, smartHistoryJson);
   server.on("/smart/history.csv", HTTP_GET, smartHistoryCsv);
-  // OTA
+  
+             // OTA
+             extern "C" void initRoutes623();
+initRoutes623();  // daftarkan route 6.2.3 (version.json + kalibrasi)
   server.on("/update", HTTP_GET, [](){ if(!server.authenticate(OTA_USER, OTA_PASS)) return server.requestAuthentication(); server.send(200,"text/html", updateHtml); });
   server.on("/update", HTTP_POST, [](){ if(!server.authenticate(OTA_USER, OTA_PASS)) return server.requestAuthentication(); bool ok=!Update.hasError(); server.sendHeader("Connection","close"); server.send(200,"text/plain", ok?"OK":"FAIL"); delay(200); ESP.restart(); },
     [](){ if(!server.authenticate(OTA_USER, OTA_PASS)) return; HTTPUpload& u=server.upload(); if(u.status==UPLOAD_FILE_START){ if(!Update.begin(UPDATE_SIZE_UNKNOWN)){ Update.printError(Serial);} } else if(u.status==UPLOAD_FILE_WRITE){ if(Update.write(u.buf,u.currentSize)!=u.currentSize){ Update.printError(Serial);} } else if(u.status==UPLOAD_FILE_END){ if(Update.end(true)){ Serial.printf("[OTA] %u bytes\n", u.totalSize);} else { Update.printError(Serial);} } else if(u.status==UPLOAD_FILE_ABORTED){ Update.end(); Serial.println("[OTA] aborted"); } });
