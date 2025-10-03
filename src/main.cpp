@@ -5,6 +5,14 @@
 #include <math.h>
 #include "Config.h"
 
+// ===== VERSION STRING PATCH (aman walau -D tanpa kutip) =====
+#ifndef BUILD_VERSION
+// fallback bila tidak didefinisikan dari platformio.ini
+#define BUILD_VERSION Build_6_2_3_SpotPattern
+#endif
+#define STR_HELPER(x) #x
+#define STR(x) STR_HELPER(x)
+#define BUILD_VERSION_STR STR(BUILD_VERSION)
 // ---- Forward declarations (route handlers) ----
 void respondJsonPresets();
 void handleCurrent();
