@@ -9,20 +9,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
-
       - name: Install PlatformIO & esptool
         run: pip install --upgrade platformio esptool
-
       - name: Clean previous build
         run: rm -rf .pio
-
       - name: Build
         run: pio run -e esp32dev -v
-
       - name: Prepare artifacts
         shell: bash
         run: |
@@ -36,9 +31,7 @@ jobs:
             esptool.py --chip esp32 merge_bin               -o dist/spotweldingplus-merged-Build_6_2_3.bin               --flash_mode dio --flash_freq 40m --flash_size 4MB               0x1000 "$BOOT" 0x8000 "$PART" 0x10000 dist/spotweldingplus-app-Build_6_2_3.bin
           fi
           cp "$BUILD/firmware.elf" dist/spotweldingplus.elf || true
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: spotweldingplus-6.2.3
           path: dist/*
