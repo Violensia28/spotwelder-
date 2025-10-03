@@ -17,6 +17,9 @@ jobs:
       - name: Install PlatformIO & esptool
         run: pip install --upgrade platformio esptool
 
+      - name: Clean previous build
+        run: rm -rf .pio
+
       - name: Build
         run: pio run -e esp32dev -v
 
