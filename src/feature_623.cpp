@@ -1,4 +1,3 @@
-
 #include <Arduino.h>
 #include <WebServer.h>
 #include <Preferences.h>
@@ -32,10 +31,14 @@ static int avgAdc(int pin, int n=64){
   return (int)(s / (n>0?n:1));
 }
 
+// ---- Handlers 6.2.3 ----
 void handleVersionJSON(){
   char buf[128];
-  snprintf(buf, sizeof(buf), "{"build":"%s","op_mode":"%s","pattern":"%s","gap_ms":%u}",
-           BUILD_VERSION, modeStr(opMode).c_str(), patStr(spotPattern).c_str(), (unsigned)gapMs);
+  // {"build":"...","op_mode":"...","pattern":"...","gap_ms":NN}
+  snprintf(buf, sizeof(buf),
+           "{\"build\":\"%s\",\"op_mode\":\"%s\",\"pattern\":\"%s\",\"gap_ms\":%u}",
+           BUILD_VERSION, modeStr(opMode).c_str(), patStr(spotPattern).c_str(),
+           (unsigned)gapMs);
   server.send(200, "application/json", String(buf));
 }
 
@@ -44,7 +47,7 @@ void calibZeroV(){
   int newOff = avgAdc(ZMPT_PIN, 64);
   V_offset = newOff;
   prefs.begin("swp", false); prefs.putInt("v_off", V_offset); prefs.end();
-  char buf[40]; snprintf(buf, sizeof(buf), "{"v_off":%d}", newOff);
+  char buf[40]; snprintf(buf, sizeof(buf), "{\"v_off\":%d}", newOff);
   server.send(200, "application/json", String(buf));
 }
 
@@ -53,7 +56,7 @@ void calibZeroI(){
   int newOff = avgAdc(ACS712_PIN, 64);
   I_offset = newOff;
   prefs.begin("swp", false); prefs.putInt("i_off", I_offset); prefs.end();
-  char buf[40]; snprintf(buf, sizeof(buf), "{"i_off":%d}", newOff);
+  char buf[40]; snprintf(buf, sizeof(buf), "{\"i_off\":%d}", newOff);
   server.send(200, "application/json", String(buf));
 }
 
@@ -68,10 +71,13 @@ void calibSetScale(){
   prefs.putFloat("i_sc", I_scale);
   prefs.end();
 
-  char buf[64]; snprintf(buf, sizeof(buf), "{"v_sc":%.5f,"i_sc":%.5f}", V_scale, I_scale);
+  char buf[64];
+  // {"v_sc":0.10000,"i_sc":0.00050}
+  snprintf(buf, sizeof(buf), "{\"v_sc\":%.5f,\"i_sc\":%.5f}", V_scale, I_scale);
   server.send(200, "application/json", String(buf));
 }
 
+// ---- Registrasi route (dipanggil dari setup() di main.cpp) ----
 extern "C" void initRoutes623(){
   server.on("/version.json",     HTTP_GET,  handleVersionJSON);
   server.on("/api/calib/zero_v", HTTP_POST, calibZeroV);
