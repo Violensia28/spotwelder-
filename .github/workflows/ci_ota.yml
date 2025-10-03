@@ -1,0 +1,38 @@
+name: CI OTA Artifacts (6.2.3)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Install PlatformIO & esptool
+        run: pip install --upgrade platformio esptool
+      - name: Clean previous build
+        run: rm -rf .pio
+      - name: Build
+        run: pio run -e esp32dev -v
+      - name: Prepare artifacts
+        shell: bash
+        run: |
+          set -e
+          BUILD=.pio/build/esp32dev
+          mkdir -p dist
+          cp "$BUILD/firmware.bin" dist/spotweldingplus-app-Build_6_2_3.bin
+          BOOT=$(ls "$BUILD"/bootloader*.bin | head -n1 || true)
+          PART=$(ls "$BUILD"/partitions*.bin | head -n1 || true)
+          if [ -n "$BOOT" ] && [ -n "$PART" ]; then
+            esptool.py --chip esp32 merge_bin \n              -o dist/spotweldingplus-merged-Build_6_2_3.bin \n              --flash_mode dio --flash_freq 40m --flash_size 4MB \n              0x1000 "$BOOT" 0x8000 "$PART" 0x10000 dist/spotweldingplus-app-Build_6_2_3.bin
+          fi
+          cp "$BUILD/firmware.elf" dist/spotweldingplus.elf || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spotweldingplus-6.2.3
+          path: dist/*
+          if-no-files-found: error
+          
