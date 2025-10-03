@@ -1,4 +1,3 @@
-
 name: CI OTA Artifacts (6.2.3)
 
 on:
@@ -28,7 +27,7 @@ jobs:
           BOOT=$(ls "$BUILD"/bootloader*.bin | head -n1 || true)
           PART=$(ls "$BUILD"/partitions*.bin | head -n1 || true)
           if [ -n "$BOOT" ] && [ -n "$PART" ]; then
-            esptool.py --chip esp32 merge_bin               -o dist/spotweldingplus-merged-Build_6_2_3.bin               --flash_mode dio --flash_freq 40m --flash_size 4MB               0x1000 "$BOOT" 0x8000 "$PART" 0x10000 dist/spotweldingplus-app-Build_6_2_3.bin
+            esptool.py --chip esp32 merge_bin \n              -o dist/spotweldingplus-merged-Build_6_2_3.bin \n              --flash_mode dio --flash_freq 40m --flash_size 4MB \n              0x1000 "$BOOT" 0x8000 "$PART" 0x10000 dist/spotweldingplus-app-Build_6_2_3.bin
           fi
           cp "$BUILD/firmware.elf" dist/spotweldingplus.elf || true
       - uses: actions/upload-artifact@v4
@@ -36,3 +35,4 @@ jobs:
           name: spotweldingplus-6.2.3
           path: dist/*
           if-no-files-found: error
+          
