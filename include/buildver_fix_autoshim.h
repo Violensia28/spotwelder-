@@ -1,7 +1,7 @@
 
 #ifndef BUILDVER_FIX_AUTOSHIM_H
 #define BUILDVER_FIX_AUTOSHIM_H
-// Build Version -> String Autoshim (safe even if -D BUILD_VERSION=TokenWithoutQuotes)
+// Build Version -> String Autoshim
 #ifndef BUILD_VERSION
 #define BUILD_VERSION Build_6_2_3_SpotPattern
 #endif
