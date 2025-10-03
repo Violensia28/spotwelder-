@@ -3,18 +3,19 @@
 #include <WebServer.h>
 #include <Preferences.h>
 #include <pgmspace.h>
-#include "buildver_fix_autoshim.h"  // ensure BUILD_VERSION is a string
+#include <stdio.h>
+#include "buildver_fix_autoshim.h"  // memastikan BUILD_VERSION jadi string literal
 
-// ===== Externals expected from existing firmware =====
-extern WebServer   server;      // created in main.cpp
-extern Preferences prefs;       // NVS namespace used in existing firmware
+// ===== Externals dari firmware utama =====
+extern WebServer   server;      // didefinisikan di main.cpp
+extern Preferences prefs;       // NVS
 extern uint8_t     opMode;      // 0=PRESET, 1=SMART
-extern uint8_t     spotPattern; // 0=SINGLE, 1=DOUBLE (6.2.2)
-extern uint16_t    gapMs;       // weld gap ms (NVS)
-extern int         V_offset;    // voltage ADC offset
-extern int         I_offset;    // current ADC offset
-extern float       V_scale;     // voltage scale
-extern float       I_scale;     // current scale
+extern uint8_t     spotPattern; // 0=SINGLE, 1=DOUBLE
+extern uint16_t    gapMs;       // ms
+extern int         V_offset;    // offset ADC V
+extern int         I_offset;    // offset ADC I
+extern float       V_scale;     // skala V
+extern float       I_scale;     // skala I
 
 #ifndef ZMPT_PIN
 #define ZMPT_PIN -1
@@ -36,13 +37,11 @@ static int avgAdc(int pin, int n=64){
 
 // ===== Handlers 6.2.3 =====
 void handleVersionJSON(){
-  String out = "{";
-  out += ""build":"";   out += BUILD_VERSION;       out += "",";
-  out += ""op_mode":""; out += modeStr(opMode);     out += "",";
-  out += ""pattern":""; out += patStr(spotPattern); out += "",";
-  out += ""gap_ms":";     out += String((int)gapMs);
-  out += "}";
-  server.send(200, "application/json", out);
+  char buf[96];
+  // {"build":"...","op_mode":"...","pattern":"...","gap_ms":NN}
+  snprintf(buf, sizeof(buf), "{"build":"%s","op_mode":"%s","pattern":"%s","gap_ms":%u}",
+           BUILD_VERSION, modeStr(opMode).c_str(), patStr(spotPattern).c_str(), (unsigned)gapMs);
+  server.send(200, "application/json", String(buf));
 }
 
 void calibZeroV(){
@@ -50,8 +49,8 @@ void calibZeroV(){
   int newOff = avgAdc(ZMPT_PIN, 64);
   V_offset = newOff;
   prefs.begin("swp", false); prefs.putInt("v_off", V_offset); prefs.end();
-  String out = String("{"v_off":") + String(newOff) + String("}");
-  server.send(200, "application/json", out);
+  char buf[40]; snprintf(buf, sizeof(buf), "{"v_off":%d}", newOff);
+  server.send(200, "application/json", String(buf));
 }
 
 void calibZeroI(){
@@ -59,8 +58,8 @@ void calibZeroI(){
   int newOff = avgAdc(ACS712_PIN, 64);
   I_offset = newOff;
   prefs.begin("swp", false); prefs.putInt("i_off", I_offset); prefs.end();
-  String out = String("{"i_off":") + String(newOff) + String("}");
-  server.send(200, "application/json", out);
+  char buf[40]; snprintf(buf, sizeof(buf), "{"i_off":%d}", newOff);
+  server.send(200, "application/json", String(buf));
 }
 
 void calibSetScale(){
@@ -74,11 +73,12 @@ void calibSetScale(){
   prefs.putFloat("i_sc", I_scale);
   prefs.end();
 
-  String out = String("{"v_sc":") + String(V_scale, 5) + String(","i_sc":") + String(I_scale, 5) + String("}");
-  server.send(200, "application/json", out);
+  char buf[64];
+  // {"v_sc":0.10000,"i_sc":0.00050}
+  snprintf(buf, sizeof(buf), "{"v_sc":%.5f,"i_sc":%.5f}", V_scale, I_scale);
+  server.send(200, "application/json", String(buf));
 }
 
-// ===== Register routes (can be called anytime before server.begin()) =====
 extern "C" void initRoutes623(){
   server.on("/version.json",     HTTP_GET,  handleVersionJSON);
   server.on("/api/calib/zero_v", HTTP_POST, calibZeroV);
@@ -86,6 +86,5 @@ extern "C" void initRoutes623(){
   server.on("/api/calib/scale",  HTTP_POST, calibSetScale);
 }
 
-// ---- Auto-register before setup() so you don't need to edit main.cpp ----
-// This relies on global static initialization order. server is already a global.
+// (opsional) auto-register sebelum setup(); kalau tidak ingin, hapus blok berikut
 static struct _AutoReg623 { _AutoReg623(){ initRoutes623(); } } _autoReg623;
